@@ -1,0 +1,95 @@
+{
+  "_doc": "Placement test (scope 4.2): 6 questions, one per screen, spanning levels A1..C1. Each row's readable part (prompt_ar + options) goes to placement_questions; the secret part (correct_option_index / accepted_answers / awards_level / weight) goes to placement_answer_keys (NO client select policy). placement awards XP=0. `key` is a stable string -> deterministic UUID in load.mjs / seed.sql. `awards_level` = the level a correct answer credits toward the scoring algorithm; harder questions carry more `weight`.",
+
+  "placement_questions": [
+    {
+      "key": "place-a1-1",
+      "position": 1,
+      "level": "A1",
+      "kind": "multiple_choice",
+      "prompt_ar": "ما معنى كلمة \"water\"؟",
+      "options": ["ماء", "نار", "هواء", "تراب"],
+      "answer": {
+        "correct_option_index": 0,
+        "awards_level": "A1",
+        "weight": 1,
+        "explanation_ar": "water تعني ماء."
+      }
+    },
+    {
+      "key": "place-a1-2",
+      "position": 2,
+      "level": "A1",
+      "kind": "multiple_choice",
+      "prompt_ar": "أكمل الجملة: \"I ____ a student.\"",
+      "options": ["am", "is", "are", "be"],
+      "answer": {
+        "correct_option_index": 0,
+        "awards_level": "A1",
+        "weight": 1,
+        "explanation_ar": "مع I نستخدم am: I am a student."
+      }
+    },
+    {
+      "key": "place-a2-1",
+      "position": 3,
+      "level": "A2",
+      "kind": "multiple_choice",
+      "prompt_ar": "اختر الصيغة الصحيحة: \"She ____ to school yesterday.\"",
+      "options": ["went", "go", "goes", "going"],
+      "answer": {
+        "correct_option_index": 0,
+        "awards_level": "A2",
+        "weight": 2,
+        "explanation_ar": "yesterday تدل على الماضي، والماضي من go هو went."
+      }
+    },
+    {
+      "key": "place-b1-1",
+      "position": 4,
+      "level": "B1",
+      "kind": "multiple_choice",
+      "prompt_ar": "اختر الصيغة الصحيحة: \"If it rains, we ____ at home.\"",
+      "options": ["will stay", "stayed", "have stayed", "staying"],
+      "answer": {
+        "correct_option_index": 0,
+        "awards_level": "B1",
+        "weight": 3,
+        "explanation_ar": "الجملة الشرطية من النوع الأول: If + present, will + verb."
+      }
+    },
+    {
+      "key": "place-b2-1",
+      "position": 5,
+      "level": "B2",
+      "kind": "multiple_choice",
+      "prompt_ar": "اختر أنسب كلمة: \"Despite ____ tired, she finished the work.\"",
+      "options": ["being", "to be", "she was", "be"],
+      "answer": {
+        "correct_option_index": 0,
+        "awards_level": "B2",
+        "weight": 4,
+        "explanation_ar": "بعد Despite يأتي اسم أو صيغة الـ -ing: Despite being tired."
+      }
+    },
+    {
+      "key": "place-c1-1",
+      "position": 6,
+      "level": "C1",
+      "kind": "multiple_choice",
+      "prompt_ar": "اختر الجملة الأصحّ والأكثر طبيعية:",
+      "options": [
+        "Had I known earlier, I would have helped.",
+        "If I would know earlier, I will help.",
+        "I would helped if I know it earlier.",
+        "Knowing earlier, I will helped."
+      ],
+      "answer": {
+        "correct_option_index": 0,
+        "awards_level": "C1",
+        "weight": 5,
+        "explanation_ar": "صيغة الشرط المقلوبة (inversion): Had I known... I would have helped."
+      }
+    }
+  ]
+}

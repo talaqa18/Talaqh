@@ -1,0 +1,66 @@
+{
+  "_doc": "Foundations stage (scope 4.3): phonics + very simple words for complete beginners, with extra Arabic support. Maps 1:1 to foundations_lessons. level defaults to 'beginner'. `kind` is free text in v1: 'phonics' | 'simple_word'. Each foundations_lesson awards XP=5 on completion (server-side). `key` is a stable string -> deterministic UUID in load.mjs / seed.sql. positions are globally unique across the foundations track.",
+
+  "foundations_lessons": [
+    {
+      "key": "found-letter-a",
+      "position": 1,
+      "level": "beginner",
+      "kind": "phonics",
+      "title_ar": "الحرف A وصوته",
+      "body_ar": "الحرف A هو أول حروف الإنجليزية. صوته القصير يشبه الفتحة في كلمة \"cat\" (قطة). انطقه: /æ/. كرّره ثلاث مرات.",
+      "letter_or_word": "A",
+      "status": "published"
+    },
+    {
+      "key": "found-letter-b",
+      "position": 2,
+      "level": "beginner",
+      "kind": "phonics",
+      "title_ar": "الحرف B وصوته",
+      "body_ar": "الحرف B صوته يشبه حرف الباء في العربية: /b/. كما في كلمة \"book\" (كتاب). أطبق شفتيك ثم افتحهما.",
+      "letter_or_word": "B",
+      "status": "published"
+    },
+    {
+      "key": "found-letter-c",
+      "position": 3,
+      "level": "beginner",
+      "kind": "phonics",
+      "title_ar": "الحرف C وصوته",
+      "body_ar": "الحرف C له صوتان: صوت /k/ كما في \"cat\"، وصوت /s/ كما في \"city\". في البداية ركّز على الصوت /k/.",
+      "letter_or_word": "C",
+      "status": "published"
+    },
+    {
+      "key": "found-word-cat",
+      "position": 4,
+      "level": "beginner",
+      "kind": "simple_word",
+      "title_ar": "كلمة بسيطة: cat",
+      "body_ar": "كلمة cat تعني قطة. تتكوّن من ثلاثة أصوات: /k/ + /æ/ + /t/. انطقها ببطء ثم بسرعة: c-a-t، cat.",
+      "letter_or_word": "cat",
+      "status": "published"
+    },
+    {
+      "key": "found-word-dog",
+      "position": 5,
+      "level": "beginner",
+      "kind": "simple_word",
+      "title_ar": "كلمة بسيطة: dog",
+      "body_ar": "كلمة dog تعني كلب. أصواتها: /d/ + /ɒ/ + /g/. انطقها: d-o-g، dog.",
+      "letter_or_word": "dog",
+      "status": "published"
+    },
+    {
+      "key": "found-word-sun",
+      "position": 6,
+      "level": "beginner",
+      "kind": "simple_word",
+      "title_ar": "كلمة بسيطة: sun",
+      "body_ar": "كلمة sun تعني شمس. أصواتها: /s/ + /ʌ/ + /n/. انطقها: s-u-n، sun.",
+      "letter_or_word": "sun",
+      "status": "published"
+    }
+  ]
+}

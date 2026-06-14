@@ -1,0 +1,335 @@
+{
+  "$schema": "./_schema-notes.md",
+  "_doc": "Golden A1 unit. EVERY id below is a STABLE STRING KEY, not a UUID. load.mjs and seed.sql derive a deterministic UUID v5 from `<NAMESPACE>:<key>` so re-running the seed is idempotent and the SQL + Node paths produce identical primary keys. The 5 words here are the ONLY words any listening/reading/grammar/conversation row may reference (integrity rule 5).",
+
+  "unit": {
+    "key": "unit-01",
+    "position": 1,
+    "level": "A1",
+    "slug": "everyday-essentials",
+    "title_ar": "أساسيات الحياة اليومية",
+    "subtitle_ar": "خمس كلمات تستخدمها كل يوم",
+    "description_ar": "في هذه الوحدة تتعلّم خمس كلمات إنجليزية أساسية تصف أشياء من حياتك اليومية: الماء، الطعام، الصديق، البيت، والكتاب. ستستمع إليها، وتقرأها، وتتحدّث بها، وتتعلّم قاعدة بسيطة تجمعها كلها.",
+    "status": "published"
+  },
+
+  "words": [
+    {
+      "key": "word-water",
+      "position": 1,
+      "level": "A1",
+      "text_en": "water",
+      "phonetic": "/ˈwɔː.tər/",
+      "translation_ar": "ماء",
+      "part_of_speech": "noun",
+      "status": "published",
+      "meaning_distractors_ar": ["نار", "هواء", "تراب"],
+      "examples": [
+        {
+          "key": "ex-water-1",
+          "position": 1,
+          "level": "A1",
+          "sentence_en": "I drink water every day.",
+          "translation_ar": "أشرب الماء كل يوم.",
+          "status": "published"
+        },
+        {
+          "key": "ex-water-2",
+          "position": 2,
+          "level": "A1",
+          "sentence_en": "The water is cold.",
+          "translation_ar": "الماء بارد.",
+          "status": "published"
+        },
+        {
+          "key": "ex-water-3",
+          "position": 3,
+          "level": "A1",
+          "sentence_en": "Can I have some water, please?",
+          "translation_ar": "هل يمكنني الحصول على بعض الماء من فضلك؟",
+          "status": "published"
+        }
+      ]
+    },
+    {
+      "key": "word-food",
+      "position": 2,
+      "level": "A1",
+      "text_en": "food",
+      "phonetic": "/fuːd/",
+      "translation_ar": "طعام",
+      "part_of_speech": "noun",
+      "status": "published",
+      "meaning_distractors_ar": ["ملابس", "سيارة", "كتاب"],
+      "examples": [
+        {
+          "key": "ex-food-1",
+          "position": 1,
+          "level": "A1",
+          "sentence_en": "The food is very good.",
+          "translation_ar": "الطعام لذيذ جداً.",
+          "status": "published"
+        },
+        {
+          "key": "ex-food-2",
+          "position": 2,
+          "level": "A1",
+          "sentence_en": "We buy food at the shop.",
+          "translation_ar": "نشتري الطعام من المتجر.",
+          "status": "published"
+        },
+        {
+          "key": "ex-food-3",
+          "position": 3,
+          "level": "A1",
+          "sentence_en": "My friend cooks the food.",
+          "translation_ar": "صديقي يطبخ الطعام.",
+          "status": "published"
+        }
+      ]
+    },
+    {
+      "key": "word-friend",
+      "position": 3,
+      "level": "A1",
+      "text_en": "friend",
+      "phonetic": "/frend/",
+      "translation_ar": "صديق",
+      "part_of_speech": "noun",
+      "status": "published",
+      "meaning_distractors_ar": ["معلّم", "طبيب", "جار"],
+      "examples": [
+        {
+          "key": "ex-friend-1",
+          "position": 1,
+          "level": "A1",
+          "sentence_en": "She is my best friend.",
+          "translation_ar": "هي أفضل صديقة لي.",
+          "status": "published"
+        },
+        {
+          "key": "ex-friend-2",
+          "position": 2,
+          "level": "A1",
+          "sentence_en": "My friend lives near me.",
+          "translation_ar": "صديقي يسكن بالقرب مني.",
+          "status": "published"
+        },
+        {
+          "key": "ex-friend-3",
+          "position": 3,
+          "level": "A1",
+          "sentence_en": "A good friend helps you.",
+          "translation_ar": "الصديق الجيد يساعدك.",
+          "status": "published"
+        }
+      ]
+    },
+    {
+      "key": "word-house",
+      "position": 4,
+      "level": "A1",
+      "text_en": "house",
+      "phonetic": "/haʊs/",
+      "translation_ar": "بيت",
+      "part_of_speech": "noun",
+      "status": "published",
+      "meaning_distractors_ar": ["شارع", "حديقة", "مدرسة"],
+      "examples": [
+        {
+          "key": "ex-house-1",
+          "position": 1,
+          "level": "A1",
+          "sentence_en": "My house is big.",
+          "translation_ar": "بيتي كبير.",
+          "status": "published"
+        },
+        {
+          "key": "ex-house-2",
+          "position": 2,
+          "level": "A1",
+          "sentence_en": "We have water in the house.",
+          "translation_ar": "لدينا ماء في البيت.",
+          "status": "published"
+        },
+        {
+          "key": "ex-house-3",
+          "position": 3,
+          "level": "A1",
+          "sentence_en": "My friend comes to my house.",
+          "translation_ar": "صديقي يأتي إلى بيتي.",
+          "status": "published"
+        }
+      ]
+    },
+    {
+      "key": "word-book",
+      "position": 5,
+      "level": "A1",
+      "text_en": "book",
+      "phonetic": "/bʊk/",
+      "translation_ar": "كتاب",
+      "part_of_speech": "noun",
+      "status": "published",
+      "meaning_distractors_ar": ["قلم", "ورقة", "باب"],
+      "examples": [
+        {
+          "key": "ex-book-1",
+          "position": 1,
+          "level": "A1",
+          "sentence_en": "I read a book at home.",
+          "translation_ar": "أقرأ كتاباً في البيت.",
+          "status": "published"
+        },
+        {
+          "key": "ex-book-2",
+          "position": 2,
+          "level": "A1",
+          "sentence_en": "This book is new.",
+          "translation_ar": "هذا الكتاب جديد.",
+          "status": "published"
+        },
+        {
+          "key": "ex-book-3",
+          "position": 3,
+          "level": "A1",
+          "sentence_en": "My friend gave me a book.",
+          "translation_ar": "صديقي أعطاني كتاباً.",
+          "status": "published"
+        }
+      ]
+    }
+  ],
+
+  "listening_clips": [
+    {
+      "key": "listen-01",
+      "position": 1,
+      "level": "A1",
+      "transcript_en": "My friend has a big house. In the house there is food and water. I read a book with my friend.",
+      "translation_ar": "صديقي لديه بيت كبير. في البيت يوجد طعام وماء. أقرأ كتاباً مع صديقي.",
+      "status": "published",
+      "uses_word_keys": ["word-friend", "word-house", "word-food", "word-water", "word-book"],
+      "comprehension_questions": [
+        {
+          "key": "lq-01-1",
+          "position": 1,
+          "level": "A1",
+          "kind": "multiple_choice",
+          "prompt_ar": "ماذا يوجد في البيت؟",
+          "options": ["طعام وماء", "سيارة", "حديقة", "مدرسة"],
+          "answer": {
+            "correct_option_index": 0,
+            "explanation_ar": "يقول النص: في البيت يوجد طعام وماء (food and water)."
+          }
+        },
+        {
+          "key": "lq-01-2",
+          "position": 2,
+          "level": "A1",
+          "kind": "multiple_choice",
+          "prompt_ar": "ماذا يقرأ المتحدّث مع صديقه؟",
+          "options": ["كتاباً", "صحيفة", "رسالة", "قائمة طعام"],
+          "answer": {
+            "correct_option_index": 0,
+            "explanation_ar": "يقول النص: أقرأ كتاباً مع صديقي (a book with my friend)."
+          }
+        }
+      ]
+    }
+  ],
+
+  "reading_passages": [
+    {
+      "key": "read-01",
+      "position": 1,
+      "level": "A1",
+      "title_en": "A Day at Home",
+      "body_en": "I have a small house. My friend visits my house every day. We drink water and eat food together. After that, we read a book. A good book and a good friend make me happy.",
+      "translation_ar": "لدي بيت صغير. صديقي يزور بيتي كل يوم. نشرب الماء ونأكل الطعام معاً. بعد ذلك، نقرأ كتاباً. الكتاب الجيد والصديق الجيد يجعلانني سعيداً.",
+      "status": "published",
+      "uses_word_keys": ["word-house", "word-friend", "word-water", "word-food", "word-book"],
+      "comprehension_questions": [
+        {
+          "key": "rq-01-1",
+          "position": 1,
+          "level": "A1",
+          "kind": "multiple_choice",
+          "prompt_ar": "كم مرة يزور الصديق البيت؟",
+          "options": ["كل يوم", "مرة في الأسبوع", "مرة في الشهر", "أبداً"],
+          "answer": {
+            "correct_option_index": 0,
+            "explanation_ar": "يقول النص: صديقي يزور بيتي كل يوم (every day)."
+          }
+        },
+        {
+          "key": "rq-01-2",
+          "position": 2,
+          "level": "A1",
+          "kind": "multiple_choice",
+          "prompt_ar": "ما الذي يجعل المتحدّث سعيداً؟",
+          "options": ["الكتاب الجيد والصديق الجيد", "البيت الكبير", "الماء البارد", "الطعام الكثير"],
+          "answer": {
+            "correct_option_index": 0,
+            "explanation_ar": "يقول النص: الكتاب الجيد والصديق الجيد يجعلانني سعيداً."
+          }
+        }
+      ]
+    }
+  ],
+
+  "grammar_lessons": [
+    {
+      "key": "gram-01",
+      "position": 1,
+      "level": "A1",
+      "title_ar": "أدوات النكرة: a / an",
+      "explanation_ar": "في الإنجليزية نضع (a) قبل الاسم المفرد المعدود عندما يبدأ بصوت ساكن، و(an) عندما يبدأ بصوت متحرك (a, e, i, o, u). مثال: نقول a book و a house و a friend لأنها تبدأ بأصوات ساكنة. الكلمات غير المعدودة مثل water و food لا تأخذ (a) أو (an) عادةً، فنقول some water و some food.",
+      "examples": [
+        { "en": "a book", "translation_ar": "كتاب (واحد)" },
+        { "en": "a house", "translation_ar": "بيت (واحد)" },
+        { "en": "a friend", "translation_ar": "صديق (واحد)" },
+        { "en": "some water", "translation_ar": "بعض الماء" },
+        { "en": "some food", "translation_ar": "بعض الطعام" }
+      ],
+      "status": "published",
+      "uses_word_keys": ["word-book", "word-house", "word-friend", "word-water", "word-food"],
+      "questions": [
+        {
+          "key": "gq-01-1",
+          "position": 1,
+          "level": "A1",
+          "kind": "multiple_choice",
+          "prompt_ar": "اختر الصيغة الصحيحة: ____ house.",
+          "options": ["a", "an", "some", "two"],
+          "uses_word_keys": ["word-house"],
+          "answer": {
+            "correct_option_index": 0,
+            "explanation_ar": "house تبدأ بصوت ساكن، لذلك نستخدم a house."
+          }
+        },
+        {
+          "key": "gq-01-2",
+          "position": 2,
+          "level": "A1",
+          "kind": "multiple_choice",
+          "prompt_ar": "اختر الصيغة الصحيحة: I want ____ water.",
+          "options": ["a", "an", "some", "the a"],
+          "uses_word_keys": ["word-water"],
+          "answer": {
+            "correct_option_index": 2,
+            "explanation_ar": "water كلمة غير معدودة، فلا تأخذ a/an؛ نقول some water."
+          }
+        }
+      ]
+    }
+  ],
+
+  "conversation_required_word_keys": [
+    "word-water",
+    "word-food",
+    "word-friend",
+    "word-house",
+    "word-book"
+  ]
+}

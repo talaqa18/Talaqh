@@ -1,0 +1,7 @@
+# Talaqa ships as a PRE-BUILT static single-file PWA in dist/.
+# Do NOT run the Vite/tsc build — it would mangle the inline-script app
+# (it tries to bundle curriculum.js / app-config.js / supabase-bridge.js).
+# Just publish dist/ as-is.
+[build]
+  publish = "dist"
+  command = "echo 'Static deploy — no build step'"

@@ -1,0 +1,38 @@
+# Supabase local config for the Arabic-first English-learning app.
+# Edge Functions all run with verify_jwt = true so only authenticated app users
+# can reach them; each function additionally re-resolves the caller (fail closed).
+
+project_id = "arabic-english-pwa"
+
+# --- Edge Functions ---------------------------------------------------------
+[functions.speech-token]
+verify_jwt = true
+
+[functions.conversation]
+verify_jwt = true
+
+[functions.stt-proxy]
+verify_jwt = true
+
+[functions.tts-fallback]
+verify_jwt = true
+
+# Talaqa lite AI (OpenAI/Whisper): content-agnostic tutor + pronunciation scoring
+[functions.tutor]
+verify_jwt = true
+
+[functions.pronounce]
+verify_jwt = true
+
+# AI lesson generator (listening/reading/grammar/writing per chapter, OpenAI)
+[functions.generate-lesson]
+verify_jwt = true
+
+# Real text-to-speech (OpenAI)
+[functions.tts]
+verify_jwt = true
+
+# --- Database seed ----------------------------------------------------------
+[db.seed]
+enabled = true
+sql_paths = ["./seed/seed.sql"]

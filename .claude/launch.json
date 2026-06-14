@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "talaqa",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/Users/moham/OneDrive/Desktop/arabic-english-pwa/arabic-english-pwa/tools/serve.cjs"],
+      "port": 8080
+    }
+  ]
+}

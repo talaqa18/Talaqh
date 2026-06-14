@@ -1,0 +1,14 @@
+# Normalize line endings: store text as LF in the repo so Windows dev and the
+# macOS/Linux CI build (Codemagic) agree. Binary assets are left untouched.
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.mp3  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary

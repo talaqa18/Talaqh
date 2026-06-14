@@ -1,0 +1,28 @@
+# deps
+node_modules/
+# build
+dist/
+dist-ssr/
+*.local
+# env
+.env
+.env.*
+!.env.example
+# Edge Function secrets template MUST stay tracked (committed, no real values).
+# The negations above only un-ignore root .env.example, not nested paths, so
+# re-include this one explicitly.
+!supabase/functions/.env.example
+# editor / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+# logs
+*.log
+npm-debug.log*
+# capacitor native projects (generated)
+ios/
+android/
+
+# Local Netlify folder
+.netlify

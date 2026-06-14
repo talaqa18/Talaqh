@@ -1,0 +1,72 @@
+# Codemagic — build & ship طلاقة to the App Store with NO Mac.
+# ---------------------------------------------------------------------------
+# ONE-TIME SETUP in the Codemagic UI (https://codemagic.io):
+#   1. Connect this repo (push it to GitHub/GitLab/Bitbucket first).
+#   2. Team → Integrations → App Store Connect: add an API key, name it exactly
+#      "CodemagicASC" (or rename it below).  Needs: Apple Developer Program ($99/yr),
+#      and the App ID com.talaqh.app registered with the "Associated Domains" capability.
+#   3. Create the app record in App Store Connect (bundle id com.talaqh.app), then set
+#      APP_STORE_APPLE_ID below to its numeric Apple ID (App Store Connect → App → General).
+#   4. Start build → it lands in TestFlight. Submit for review from App Store Connect.
+#
+# This app has NO build step: `npm run dist:copy` COPIES the static files into dist/
+# (the webDir Capacitor bundles). NEVER `npm run build` — it would mangle index.html.
+# ---------------------------------------------------------------------------
+workflows:
+  ios-release:
+    name: طلاقة — iOS (App Store)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    integrations:
+      app_store_connect: CodemagicASC
+    environment:
+      ios_signing:
+        distribution_type: app_store      # automatic signing via the ASC integration
+        bundle_identifier: com.talaqh.app
+      vars:
+        XCODE_WORKSPACE: "ios/App/App.xcworkspace"
+        XCODE_SCHEME: "App"
+        BUNDLE_ID: "com.talaqh.app"
+        APP_STORE_APPLE_ID: 0000000000     # <-- replace with your app's numeric Apple ID
+      node: 22
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Install dependencies
+        script: npm ci
+      - name: Refresh dist/ from root (NEVER npm run build)
+        script: npm run dist:copy
+      - name: Add iOS platform if missing
+        script: |
+          if [ ! -d "ios" ]; then npx cap add ios; fi
+      - name: Inject Info.plist keys (mic permission + encryption + portrait lock)
+        script: |
+          PLIST="ios/App/App/Info.plist"
+          MIC="نحتاج الميكروفون لتسجيل نطقك وتقييمه وللمحادثة الصوتية مع المعلّم."
+          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string $MIC" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :NSMicrophoneUsageDescription $MIC" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :ITSAppUsesNonExemptEncryption false" "$PLIST"
+          # Lock to portrait — the fixed ~460px Arabic UI isn't designed for landscape.
+          # The default Capacitor template allows landscape, so reset the array to portrait-only.
+          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
+      - name: Sync iOS + generate icons/splash
+        script: |
+          npx cap sync ios
+          npx @capacitor/assets generate --ios
+      - name: Set up code signing
+        script: xcode-project use-profiles
+      - name: Build IPA
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true   # set to App Store review manually once TestFlight looks good

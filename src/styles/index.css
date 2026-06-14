@@ -1,0 +1,18 @@
+/* @import must precede all other statements, so design tokens load first.
+   Otherwise the CSS spec makes the browser ignore this import and every
+   var(--color-*) below resolves to nothing. */
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base RTL document styling. English content should be wrapped with dir="ltr". */
+html { direction: rtl; }
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: "Cairo", "Tajawal", sans-serif;
+}
+.ltr { direction: ltr; unicode-bidi: isolate; font-family: "Inter", sans-serif; }

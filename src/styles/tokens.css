@@ -1,0 +1,11 @@
+/* Single source of design tokens. Consumed via Tailwind theme + components.
+   Do NOT use raw hex values in components — reference these. */
+:root {
+  --color-brand: #0f766e;     /* emerald/teal primary */
+  --color-brand-600: #0d9488;
+  --color-gold: #d4a017;      /* points / streak / rewards */
+  --color-surface: #f5f5f4;   /* warm-gray background */
+  --color-card: #ffffff;
+  --color-text: #1c1917;
+  --radius-card: 1rem;
+}
