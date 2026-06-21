@@ -2999,7 +2999,14 @@ SCREENS.settings = (s)=>{
         divider(),
         settingRow('bell', T.CO, 'تذكير يومي', 'ما تقطع السلسلة!', toggle(reminderIsOn(), ()=>toggleDailyReminder(), 'تذكير يومي')),
         s.settings.dailyReminder ? divider() : null,
-        s.settings.dailyReminder ? settingRow('clock', T.CO, 'وقت التذكير', 'اختر الوقت الأنسب لك', h('input',{ id:'reminderTimeInput', type:'time', class:'en', value:s.settings.reminderTime||'19:00', 'aria-label':'وقت التذكير اليومي', onChange:(e)=>{ const v=(e&&e.target&&e.target.value)||'19:00'; setS({reminderTime:v}); if(isNativeApp()) NativeNotify.schedule(v); else Notify.start(); syncSettings(); }, style:{ border:`2px solid ${T.line}`, borderRadius:'10px', padding:'7px 10px', fontWeight:800, fontSize:'15px', color:T.ink, background:T.card } })) : null),
+        s.settings.dailyReminder ? settingRow('clock', T.CO, 'وقت التذكير', 'اختر الوقت الأنسب لك', h('input',{ id:'reminderTimeInput', type:'time', class:'en', value:s.settings.reminderTime||'19:00', 'aria-label':'وقت التذكير اليومي', onChange:(e)=>{ const v=(e&&e.target&&e.target.value)||'19:00';
+            // Update + persist the time WITHOUT a re-render. setS()/app.set() would call
+            // notify() -> render() -> root.replaceChildren(), which destroys THIS
+            // <input type="time"> node while its native picker is mid-commit — making the
+            // picker disappear and the screen freeze. The input already shows v, so there
+            // is nothing on screen to repaint here.
+            app.state.settings = Object.assign({}, app.state.settings, { reminderTime:v }); app.persist();
+            if(isNativeApp()) NativeNotify.schedule(v); else Notify.start(); syncSettings(); }, style:{ border:`2px solid ${T.line}`, borderRadius:'10px', padding:'7px 10px', fontWeight:800, fontSize:'15px', color:T.ink, background:T.card } })) : null),
       // daily goal picker
       card({ p:14, style:{'--i':3, marginTop:'10px'} },
         h('div',{style:{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'12px' }},
