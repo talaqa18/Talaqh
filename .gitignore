@@ -26,3 +26,7 @@ android/
 
 # Local Netlify folder
 .netlify
+
+# Supabase CLI local state (transient: link target, version cache)
+supabase/.temp/
+supabase/.branches/

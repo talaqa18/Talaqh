@@ -424,10 +424,32 @@ const TB = {
     fd.append("audio", audioBlob, this._fname(audioBlob));
     return await this._postForm("stt-proxy", fd);
   },
-  // --- microphone capture (browser only; records up to maxMs then stops) -----
-  async _recordOnce(maxMs = 4000) {
+  // --- microphone capture (browser only) -------------------------------------
+  // Hold a WARM mic stream so a record tap starts capturing INSTANTLY instead of
+  // re-running getUserMedia (which re-initialises the audio pipeline — the source
+  // of the "mic takes a moment to start hearing me" lag). Acquired on a voice
+  // screen's entry (when permission is already granted) and released on nav-away
+  // via releaseMic() so the OS recording indicator is never left on.
+  async warmMic() {
     if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) throw new Error("mic unavailable");
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (this._micStream && this._micStream.active) return this._micStream;
+    this._micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return this._micStream;
+  },
+  /** Stop + drop the warm mic stream (call on nav-away / app backgrounded). */
+  releaseMic() {
+    try { this.stopRecording(); } catch (_) {}
+    try { if (this._micStream) this._micStream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+    this._micStream = null;
+  },
+  async _recordOnce(maxMs = 4000, opts) {
+    opts = opts || {};
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) throw new Error("mic unavailable");
+    // Reuse the warm stream when we have one (instant start); otherwise acquire a
+    // throwaway stream for this take and stop it when done.
+    const warm = !!(this._micStream && this._micStream.active);
+    const stream = warm ? this._micStream : await navigator.mediaDevices.getUserMedia({ audio: true });
+    const releaseStream = () => { if (!warm) { try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {} } };
     return await new Promise((resolve, reject) => {
       let mr;
       const chunks = [];
@@ -445,19 +467,96 @@ const TB = {
         }
       } catch (_) {}
       try { mr = chosen ? new MediaRecorder(stream, { mimeType: chosen }) : new MediaRecorder(stream); }
-      catch (e) { try { mr = new MediaRecorder(stream); } catch (e2) { stream.getTracks().forEach((t) => t.stop()); return reject(e2); } }
+      catch (e) { try { mr = new MediaRecorder(stream); } catch (e2) { releaseStream(); return reject(e2); } }
       this._rec = mr;
+      let hardStop = 0;
+      // Voice-activity detection: auto-stop ~0.9s after the learner stops talking so
+      // they never have to tap "done". maxMs stays as a hard safety cap. Disabled
+      // with opts.vad === false.
+      const vad = opts.vad === false ? null : this._startVad(stream, () => {
+        try { if (mr.state !== "inactive") mr.stop(); } catch (_) {}
+      }, opts);
+      const cleanup = () => { if (hardStop) clearTimeout(hardStop); if (vad) vad.stop(); };
       mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-      mr.onstop = () => { stream.getTracks().forEach((t) => t.stop()); this._rec = null; resolve(new Blob(chunks, { type: mr.mimeType || chosen || "audio/mp4" })); };
-      mr.onerror = (e) => { stream.getTracks().forEach((t) => t.stop()); this._rec = null; reject((e && e.error) || new Error("record error")); };
+      mr.onstop = () => { cleanup(); releaseStream(); this._rec = null; resolve(new Blob(chunks, { type: mr.mimeType || chosen || "audio/mp4" })); };
+      mr.onerror = (e) => { cleanup(); releaseStream(); this._rec = null; reject((e && e.error) || new Error("record error")); };
       mr.start();
-      setTimeout(() => { try { if (mr.state !== "inactive") mr.stop(); } catch (_) {} }, maxMs);
+      hardStop = setTimeout(() => { try { if (mr.state !== "inactive") mr.stop(); } catch (_) {} }, maxMs);
     });
+  },
+  // Web-Audio RMS meter -> fires onSilence() once the speaker has clearly spoken and
+  // then gone quiet for opts.silenceMs. Guarded; a no-op (never auto-stops, leaving
+  // the maxMs cap in charge) when Web Audio is unavailable.
+  _startVad(stream, onSilence, opts) {
+    opts = opts || {};
+    const SILENCE_MS = opts.silenceMs || 900;   // quiet gap that ends a turn
+    const MIN_MS = opts.minMs || 500;           // ignore the first instant (tap noise / lead-in)
+    const START = opts.startLevel || 0.025;     // RMS above this = speech detected
+    const STOP = opts.stopLevel || 0.012;       // RMS below this = silence
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return { stop() {} };
+      const ctx = new AC();
+      try { if (ctx.state === "suspended" && ctx.resume) ctx.resume(); } catch (_) {}
+      const src = ctx.createMediaStreamSource(stream);
+      const an = ctx.createAnalyser();
+      an.fftSize = 1024; an.smoothingTimeConstant = 0.6;
+      src.connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      const t0 = Date.now();
+      let spoke = false, quietAt = 0, timer = 0, stopped = false;
+      const finish = () => { if (stopped) return; stopped = true; try { onSilence(); } catch (_) {} };
+      timer = setInterval(() => {
+        if (stopped) return;
+        an.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+        const rms = Math.sqrt(sum / buf.length);
+        const now = Date.now();
+        if (now - t0 < MIN_MS) return;
+        if (rms >= START) { spoke = true; quietAt = 0; }
+        else if (spoke && rms < STOP) {
+          if (!quietAt) quietAt = now;
+          else if (now - quietAt >= SILENCE_MS) finish();
+        }
+      }, 60);
+      return { stop() { stopped = true; try { clearInterval(timer); } catch (_) {} try { src.disconnect(); } catch (_) {} try { ctx.close(); } catch (_) {} } };
+    } catch (_) { return { stop() {} }; }
   },
   /** Stop an in-flight recording early (tap-to-stop / cancel / nav-away). */
   stopRecording() { try { if (this._rec && this._rec.state !== "inactive") this._rec.stop(); } catch (_) {} },
-  async recordThenScore(expected, maxMs = 4000) { const blob = await this._recordOnce(maxMs); return await this.pronounce(blob, expected); },
-  async recordThenTranscribe(maxMs = 5000) { const blob = await this._recordOnce(maxMs); return await this.transcribe(blob); },
+  async recordThenScore(expected, maxMs = 6000, opts) { const blob = await this._recordOnce(maxMs, Object.assign({ silenceMs: 800 }, opts)); return await this.pronounce(blob, expected); },
+  async recordThenTranscribe(maxMs = 15000, opts) {
+    const onStop = opts && opts.onStop;
+    const blob = await this._recordOnce(maxMs, Object.assign({ silenceMs: 1100, minMs: 700 }, opts));
+    try { if (onStop) onStop(); } catch (_) {}
+    return await this.transcribe(blob);
+  },
+  // Predicted public CDN url for a phrase's pre-generated clip — pure hashing, NO
+  // network. Audio2 plays this DIRECTLY (no HEAD pre-check) so a cached clip starts
+  // in a single round-trip and is HTTP-cached after; on a 404 the player falls back
+  // to tts() to generate it. Key must match the tts function's clipKey(text,voice,0.9).
+  async clipUrl(text, voice) {
+    const t = (text || "").trim();
+    if (!t) throw new Error("empty text");
+    const v = voice || "fable";
+    const key = await _clipKey(`${t}|${v}|0.9`);
+    return `${SB_URL}/storage/v1/object/public/tts-cache/${key}.mp3`;
+  },
+  // Pre-warm a clip into the BROWSER HTTP CACHE by actually downloading its bytes
+  // (a HEAD alone confirms existence but caches nothing). Called fire-and-forget on
+  // voice-screen entry so the first play is served from cache (~instant) instead of
+  // paying a cold origin fetch. Misses fall through to tts() to generate the clip.
+  async prewarmClip(text, voice) {
+    const t = (text || "").trim();
+    if (!t) return null;
+    try {
+      const u = await this.clipUrl(t, voice);
+      const r = await fetch(u, { method: "GET", cache: "force-cache" });
+      if (r && r.ok) { try { await r.arrayBuffer(); } catch (_) {} return u; }  // drain -> cached
+    } catch (_) { /* fall through to generate */ }
+    try { return await this.tts(t, voice); } catch (_) { return null; }
+  },
 
   // Real text-to-speech (OpenAI). Returns a cached object URL per phrase so
   // repeat plays are instant and free. De-dupes concurrent requests for the same
@@ -547,6 +646,18 @@ const TB = {
 
 if (typeof window !== "undefined") {
   window.TalaqaBackend = TB;
+  // Warm the TLS connection to Supabase Storage so the FIRST audio clip streams
+  // without a cold DNS+TLS handshake (shaves ~100-300ms off first playback).
+  try {
+    if (SB_URL && typeof document !== "undefined" && document.head) {
+      const origin = new URL(SB_URL).origin;
+      [["preconnect", "anonymous"], ["dns-prefetch", null]].forEach(([rel, cors]) => {
+        const l = document.createElement("link");
+        l.rel = rel; l.href = origin; if (cors) l.crossOrigin = cors;
+        document.head.appendChild(l);
+      });
+    }
+  } catch (_) {}
   TB.init().then(() => { try { window.dispatchEvent(new Event("talaqa:ready")); } catch (_) {} });
 }
 

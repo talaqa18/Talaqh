@@ -501,15 +501,27 @@ const Audio2 = {
     const TB=(typeof window!=='undefined')&&window.TalaqaBackend;
     // Real, natural TTS via the backend when connected; browser voice otherwise.
     if(TB&&TB.enabled&&TB.tts){
-      TB.tts(text).then(url=>{
-        const el=this._el||(this._el=new Audio());
+      const self=this;
+      const el=this._el||(this._el=new Audio());
+      try{ el.preload='auto'; }catch(_){}
+      let done=false;
+      const finish=()=>{ if(done)return; done=true; self.speaking=null; if(onend)onend(); };
+      // Set src + play a url, calling onFail on any load/play error.
+      const startPlay=(url, onFail)=>{
         el.src=url;
         try{ el.playbackRate = rate||1; }catch(_){}   // slow/normal playback for the TTS clip
-        el.onended=()=>{ this.speaking=null; if(onend)onend(); };
-        el.onerror=()=>{ this.speaking=null; this._fallback(text,onend,rate); };
-        this.speaking=text;
-        const p=el.play(); if(p&&p.catch) p.catch(()=>{ this.speaking=null; this._fallback(text,onend,rate); });
-      }).catch(()=>this._fallback(text,onend,rate));
+        el.onended=finish;
+        el.onerror=onFail;
+        self.speaking=text;
+        const p=el.play(); if(p&&p.catch) p.catch(onFail);
+      };
+      const toSynth=()=>{ self.speaking=null; self._fallback(text,onend,rate); };           // last resort: browser voice
+      const generate=()=>{ TB.tts(text).then(u=>startPlay(u,toSynth)).catch(toSynth); };     // CDN miss: generate, then play
+      // FAST PATH: play the predicted CDN clip DIRECTLY — one round-trip, no blocking
+      // HEAD pre-check, HTTP-cached after the first play (sub-second). Only if it 404s
+      // do we generate it; only if that fails do we fall back to the browser voice.
+      if(TB.clipUrl){ TB.clipUrl(text).then(u=>startPlay(u,generate)).catch(generate); }
+      else { TB.tts(text).then(u=>startPlay(u,toSynth)).catch(toSynth); }
       return;
     }
     this._fallback(text, onend, rate);
@@ -1271,10 +1283,14 @@ function generateChapterExamples(ch){
    so the first tap on play is instant. each phrase prefetched at most once. */
 function prefetchWordAudio(w){
   try{
-    const be=_backend(); if(!be || typeof be.tts!=='function' || !w) return;
+    const be=_backend(); if(!be || !w) return;
+    // Prefer prewarmClip (downloads the bytes into the HTTP cache so the first tap is
+    // instant); fall back to tts (HEAD/generate) on older bridges.
+    const fn=(typeof be.prewarmClip==='function') ? be.prewarmClip.bind(be) : (typeof be.tts==='function' ? be.tts.bind(be) : null);
+    if(!fn) return;
     app._ttsWarm=app._ttsWarm||{};
     const warm=(txt)=>{ const t=String(txt||'').trim(); if(!t || app._ttsWarm[t]) return; app._ttsWarm[t]=1;
-      Promise.resolve(be.tts(t)).catch(()=>{}); };
+      Promise.resolve(fn(t)).catch(()=>{}); };
     warm(w.en);
     (w.examples||[]).forEach(ex=>warm(ex && ex.en));
   }catch(_){}
@@ -1286,6 +1302,19 @@ function prefetchAllWords(){
   try{
     if(typeof WORDS==='undefined' || !Array.isArray(WORDS)) return;
     WORDS.slice(0,5).forEach(w=>{ if(w) prefetchWordAudio(w); });
+  }catch(_){}
+}
+/* Warm the mic on a voice screen so the first record tap starts capturing instantly.
+   Guarded: once per screen key, backend-enabled only, and ONLY when mic permission is
+   already 'granted' (never trigger a surprise prompt on screen entry — first-ever use
+   acquires on the tap, every visit after is instant). */
+function warmMicForScreen(key){
+  try{
+    const be=_backend(); if(!be||!be.enabled||typeof be.warmMic!=='function') return;
+    if(app._micWarmKey===key) return; app._micWarmKey=key;
+    if(typeof navigator!=='undefined' && navigator.permissions && navigator.permissions.query){
+      navigator.permissions.query({name:'microphone'}).then(p=>{ if(p && p.state==='granted'){ try{ be.warmMic().catch(()=>{}); }catch(_){} } }).catch(()=>{});
+    }
   }catch(_){}
 }
 /* generate (or reuse cached) listening/reading/grammar/writing for a chapter */
@@ -3666,6 +3695,7 @@ function weakWord(word, weak, words){
 }
 function pronUI(cfg){
   const s=app.state, st=s.ui.pron||'idle', score=s.ui.score, tries=s.ui.pronTries||0, playing=s.ui.playId==='mp';
+  warmMicForScreen('pron:'+(cfg.label||cfg.display||''));   // first tap records instantly
   const startRec=()=>{
     app.setUI({ pron:'rec' });
     const TB=(typeof window!=='undefined')&&window.TalaqaBackend;
@@ -3673,7 +3703,7 @@ function pronUI(cfg){
       // Real pronunciation: record from the mic (tap-to-stop), then score. We
       // split record -> 'scoring' -> result so the user sees an honest spinner
       // during the network call instead of a fake "listening" state.
-      TB._recordOnce(4000).then(blob=>{
+      TB._recordOnce(6000, { silenceMs:800 }).then(blob=>{
         if(app.state.ui.pron!=='rec'){ const e=new Error('cancelled'); e.__cancelled=true; throw e; }
         app.setUI({ pron:'scoring' });
         return TB.pronounce(blob, cfg.display);
@@ -3711,7 +3741,7 @@ function pronUI(cfg){
         h('span',{class:'recwave'}), h('span',{class:'recwave', style:{ animationDelay:'.7s' }}),
         h('div',{style:{ position:'absolute', inset:0, borderRadius:'50%', background:T.bad, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 8px 0 ${T.cod}` }}, ico('mic',{size:42}))),
       h('div',{style:{ marginTop:'20px', fontWeight:900, fontSize:'16px', color:T.bad }},'…أنصت إليك'),
-      h('div',{style:{ marginTop:'6px', fontSize:'12.5px', color:T.mut, fontWeight:700 }},'قول الكلمة ثم اضغط الدائرة لما تنتهي'),
+      h('div',{style:{ marginTop:'6px', fontSize:'12.5px', color:T.mut, fontWeight:700 }},'قول الكلمة — نوقف التسجيل تلقائياً، أو اضغط الدائرة'),
       h('div',{style:{ display:'flex', gap:'4px', justifyContent:'center', marginTop:'12px', height:'24px', alignItems:'flex-end' }},
         ...Array.from({length:9},(_,i)=>h('span',{class:'eqbar', style:{ background:T.bad, height:'100%', animation:`bars ${0.6+ (i%3)*0.15}s ease-in-out ${i*0.06}s infinite` }}))));
   } else if(st==='scoring'){
@@ -4067,8 +4097,9 @@ SCREENS.listen_clip = (s)=>{
   if(lessonPending()) return frame(statusBar(), lessonTop(0, 'الاستماع', ()=>go('unit_hub',{},{resetStack:true})), lessonStatusBody(false));
   const i=s.params.i||0, c=LISTENING[i], playing=s.ui.playId==='c', tr=s.ui.tr0;
   if(!c) return bounceFrame('الاستماع');
-  // warm the clip audio immediately so playback (and auto-play) starts fast
-  try{ const TBw=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBw&&TBw.enabled&&TBw.tts && c&&c.en){ app._aWarm=app._aWarm||{}; if(!app._aWarm[c.en]){ app._aWarm[c.en]=1; TBw.tts(c.en).catch(()=>{}); } } }catch(_){}
+  // warm the clip audio immediately (download bytes into HTTP cache) so the 420ms
+  // auto-play and any tap start instantly — prewarmClip preferred, tts as fallback.
+  try{ const TBw=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBw&&TBw.enabled && c&&c.en){ const wf=TBw.prewarmClip?TBw.prewarmClip.bind(TBw):(TBw.tts?TBw.tts.bind(TBw):null); if(wf){ app._aWarm=app._aWarm||{}; if(!app._aWarm[c.en]){ app._aWarm[c.en]=1; Promise.resolve(wf(c.en)).catch(()=>{}); } } } }catch(_){}
   if(s.settings.autoAudio && !s.ui.autoSpoke){
     setTimeout(()=>{ if(app.state.screen==='listen_clip' && (typeof window==='undefined'||window._talaqaGestured)){ app.setUI({autoSpoke:true, playId:'c'}); Audio2.speak(c.en,()=>app.setUI({playId:null})); } }, 420);
   }
@@ -4130,7 +4161,7 @@ SCREENS.reading = (s)=>{
   }
   const tr=s.ui.tr, playing=s.ui.playId==='r', sel=s.ui.sel, revealed=s.ui.revealed;
   const full=(READING.lines||[]).map(l=>l.en).join(' ');
-  try{ const TBw=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBw&&TBw.enabled&&TBw.tts && full){ app._aWarm=app._aWarm||{}; if(!app._aWarm[full]){ app._aWarm[full]=1; TBw.tts(full).catch(()=>{}); } } }catch(_){}
+  try{ const TBw=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBw&&TBw.enabled && full){ const wf=TBw.prewarmClip?TBw.prewarmClip.bind(TBw):(TBw.tts?TBw.tts.bind(TBw):null); if(wf){ app._aWarm=app._aWarm||{}; if(!app._aWarm[full]){ app._aWarm[full]=1; Promise.resolve(wf(full)).catch(()=>{}); } } } }catch(_){}
   const answered = sel!=null && revealed;
   const choose=(k)=>{ if(revealed) return; const ok=k===q.answer; buzz(ok?18:[10,40,10]); try{ ok?SFX.correct():SFX.wrong(); }catch(_){} app.setUI({sel:k, revealed:true}); };
   const enCh=isEnChoices(q.choices);
@@ -4217,6 +4248,8 @@ SCREENS.convo_intro = ()=> frame(
 );
 
 SCREENS.convo = (s)=>{
+  warmMicForScreen('convo');                                                                   // first voice tap records instantly
+  try{ (CONVO.targetWords||[]).forEach(w=>{ if(w && typeof prefetchWordAudio==='function') prefetchWordAudio({en:w}); }); }catch(_){}   // warm target-word audio
   // init once
   if(!s.ui.convoInit && !app._convoIniting){
     app._convoIniting = true;
@@ -4261,7 +4294,7 @@ SCREENS.convo = (s)=>{
       const startRec=()=>{
       if(app.state.screen!=='convo' || app.state.ui.recing) return;
       app.setUI({ recing:true, hint:null });
-      withTimeout(TB.recordThenTranscribe(15000), 30000).then(stt=>{
+      withTimeout(TB.recordThenTranscribe(15000, { onStop:()=>{ if(app.state.screen==='convo' && app.state.ui.recing) app.setUI({ recing:false, mtyping:true }); } }), 30000).then(stt=>{
         if(app.state.screen!=='convo'){ app.setUI({ recing:false }); return; }
         const userText=((stt&&stt.text)||'').trim();
         if(!userText){ app.setUI({ recing:false, mtyping:false }); toast('ما سمعت حاجة، جرّب مرة ثانية'); return; }
@@ -4791,7 +4824,7 @@ function render(){
   if(app.state.screen!=='convo' && app._timer){ clearInterval(app._timer); app._timer=null; }
   const key = app.state.screen + '|' + JSON.stringify(app.state.params||{});
   const isNav = key !== app._lastKey;
-  if(isNav){ Audio2.stop(); try{ const TBn=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBn&&TBn.stopRecording) TBn.stopRecording(); }catch(_){} }
+  if(isNav){ Audio2.stop(); try{ const TBn=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBn){ if(TBn.releaseMic) TBn.releaseMic(); else if(TBn.stopRecording) TBn.stopRecording(); } }catch(_){} app._micWarmKey=null; }   // drop warm mic on nav (privacy); re-warmed by the next voice screen
 
   // preserve text-input focus across in-screen re-renders
   const ae = document.activeElement;
@@ -4900,7 +4933,7 @@ function boot(){
     try{ navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }catch(_){}
   }
   // pause speech when tab hidden
-  document.addEventListener('visibilitychange', ()=>{ if(document.hidden) Audio2.stop(); });
+  document.addEventListener('visibilitychange', ()=>{ if(document.hidden){ Audio2.stop(); try{ const TBh=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBh&&TBh.releaseMic) TBh.releaseMic(); }catch(_){} app._micWarmKey=null; } });
 
   // When connectivity returns, flush the last cloud save that failed.
   window.addEventListener('online', ()=>{ try{ const TB=(typeof window!=='undefined')&&window.TalaqaBackend; if(app._cloudDirty && app._restored && app._lastUnsaved && TB && TB.saveState){ Promise.resolve(TB.saveState(app._lastUnsaved)).then(ok=>{ app._cloudDirty=!ok; if(ok) app._lastUnsaved=null; if(app.notify) app.notify(); }); } }catch(_){} });
