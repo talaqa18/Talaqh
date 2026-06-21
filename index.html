@@ -176,6 +176,7 @@ const T_LIGHT = {
   bg:'#eef1ff', ink:'#20254f', mut:'#5b6090', faint:'#7e84bd',
   line:'#dde2ff', card:'#ffffff', edge:'#c9d0f5',
   Y:'#ffd43b', Yd:'#e6b800', CO:'#ff8787', COd:'#e86b6b',
+  Ysoft:'#fff5d6', Yink:'#8a6a00',
   good:'#1faf6a', goodD:'#178a54', goodSoft:'#ddf5ea',
   bad:'#ef5b6b', badSoft:'#ffe5e8',
   sh:'0 14px 26px -16px rgba(45,50,115,.34)',
@@ -191,6 +192,7 @@ const T_DARK = {
   bg:'#0e1220', ink:'#e8ecf4', mut:'#9aa3b5', faint:'#727c93',
   line:'#2a3140', card:'#1a1f29', edge:'#2a3140',
   Y:'#ffd43b', Yd:'#e0bb2e', CO:'#ff9a9a', COd:'#e07878',
+  Ysoft:'#3a3320', Yink:'#ffd43b',
   good:'#3fce8a', goodD:'#2faf73', goodSoft:'#16302a',
   bad:'#ff6b7b', badSoft:'#33212a',
   sh:'0 14px 26px -16px rgba(0,0,0,.6)',
@@ -1110,6 +1112,72 @@ const SCREENS = {};
 function _curr(){ return (typeof window!=='undefined') && window.CURRICULUM; }
 function _backend(){ return (typeof window!=='undefined') && window.TalaqaBackend; }
 function _shuffle(arr){ const a=arr.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
+/* Damerau-Levenshtein edit distance (counts an adjacent-letter swap as ONE edit,
+   so common typos like "recieve" read as close). Used for confusing distractors
+   and the spelling "قريب" near-match. */
+function _editDist(a,b){
+  a=String(a).toLowerCase(); b=String(b).toLowerCase();
+  const m=a.length, n=b.length;
+  if(!m) return n; if(!n) return m;
+  const d=[]; for(let i=0;i<=m;i++){ d[i]=[i]; } for(let j=0;j<=n;j++){ d[0][j]=j; }
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      const cost=a[i-1]===b[j-1]?0:1;
+      d[i][j]=Math.min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost);
+      if(i>1 && j>1 && a[i-1]===b[j-2] && a[i-2]===b[j-1]) d[i][j]=Math.min(d[i][j], d[i-2][j-2]+1);
+    }
+  }
+  return d[m][n];
+}
+/* Global distractor pool built once from the WHOLE curriculum, so quiz options can
+   be CONFUSING NEW words the learner didn't just study (not the unit's own 5). */
+let _DPOOL=null;
+function distractPool(){
+  if(_DPOOL) return _DPOOL;
+  const C=_curr(); const words=(C&&Array.isArray(C.words))?C.words:[];
+  const seenAr={}, seenEn={}, ar=[], en=[];
+  words.forEach(w=>{ if(!w) return;
+    const a=(w.ar||'').trim(), e=(w.en||'').trim(), pos=w.pos||'', lvl=w.level||'';
+    if(a && !seenAr[a]){ seenAr[a]=1; ar.push({ ar:a, pos, lvl }); }
+    if(e && !seenEn[e.toLowerCase()]){ seenEn[e.toLowerCase()]=1; en.push({ en:e, pos, lvl }); }
+  });
+  _DPOOL={ ar, en };
+  return _DPOOL;
+}
+/* n CONFUSING Arabic-meaning distractors from the whole curriculum, excluding the
+   answer + the unit's own meanings. Prefers same part-of-speech (and level) so the
+   options are plausible — the learner can't pick by "which one I just saw". */
+function distractAr(answerAr, excludeAr, n, pos, level){
+  const pool=distractPool().ar; if(!pool.length) return [];
+  const excl={}; (excludeAr||[]).forEach(a=>{ if(a) excl[String(a).trim()]=1; }); excl[String(answerAr).trim()]=1;
+  const cands=pool.filter(w=>!excl[w.ar]);
+  const t1=cands.filter(w=>pos&&w.pos===pos&&level&&w.lvl===level);  // same category + level
+  const t2=cands.filter(w=>pos&&w.pos===pos);                        // same category
+  const t3=cands;                                                    // anything else
+  const ordered=_shuffle(t1).concat(_shuffle(t2)).concat(_shuffle(t3));
+  const out=[], seen={};
+  for(const w of ordered){ if(out.length>=n) break; if(seen[w.ar]) continue; seen[w.ar]=1; out.push(w.ar); }
+  return out;
+}
+/* n CONFUSING English distractors — real curriculum words that LOOK like the answer
+   (similar spelling/length/first-letter) so the choice isn't obvious. */
+function distractEn(answerEn, excludeEn, n){
+  const pool=distractPool().en; if(!pool.length) return [];
+  const ans=String(answerEn||'').toLowerCase();
+  const excl={}; (excludeEn||[]).forEach(e=>{ if(e) excl[String(e).toLowerCase()]=1; }); excl[ans]=1;
+  const cands=pool.filter(w=>!excl[w.en.toLowerCase()]);
+  const scored=cands.map(w=>{ const e=w.en.toLowerCase();
+    let d=_editDist(ans,e);
+    if(e[0]===ans[0]) d-=0.6;                       // same starting letter -> looks alike
+    d+=Math.abs(e.length-ans.length)*0.3;           // similar length -> looks alike
+    return { en:w.en, d };
+  }).sort((a,b)=>a.d-b.d);
+  const top=scored.slice(0, Math.max(n*4, 12));     // a confusing top slice...
+  const out=[], seen={};
+  for(const w of _shuffle(top)){ if(out.length>=n) break; const k=w.en.toLowerCase(); if(seen[k]) continue; seen[k]=1; out.push(w.en); }
+  if(out.length<n){ for(const w of scored){ if(out.length>=n) break; const k=w.en.toLowerCase(); if(seen[k]) continue; seen[k]=1; out.push(w.en); } }
+  return out;
+}
 /* group a level's word rows into ordered chapters (preserving first-seen order) */
 function chaptersFor(level){
   const C=_curr(); if(!C || !Array.isArray(C.words)) return [];
@@ -1126,13 +1194,19 @@ function chaptersFor(level){
 /* map 5 raw curriculum rows -> the app's word shape */
 function mapWords(rawRows){
   const rows=rawRows.slice(0,5);
-  const allAr=rows.map(r=>r.ar);
+  const unitAr=rows.map(r=>r.ar);   // never offer the unit's own 5 meanings as distractors
   return rows.map((r,i)=>{
     const thisAr=r.ar;
-    const distractors=_shuffle(allAr.filter((_,j)=>j!==i)).slice(0,3);
+    // CONFUSING distractors: NEW words from the whole curriculum (same part-of-speech
+    // / level so they're plausible), not the other words the learner just studied.
+    let distractors=distractAr(thisAr, unitAr, 3, r.pos, r.level);
+    if(distractors.length<3){   // tiny/absent curriculum (demo, harness) -> old behavior
+      const seen={}; distractors.forEach(d=>seen[d]=1);
+      _shuffle(unitAr).forEach(a=>{ if(distractors.length<3 && a!==thisAr && !seen[a]){ seen[a]=1; distractors.push(a); } });
+    }
     const choices=_shuffle([thisAr].concat(distractors));
     return {
-      en:r.en, ar:r.ar, ipa:'', translit:r.phonetic||'',
+      en:r.en, ar:r.ar, ipa:'', translit:r.phonetic||'', pos:r.pos||'', level:r.level||'',
       // Prefer the PRE-GENERATED examples file (instant, 3 per word); fall back to
       // the curriculum's single example, then to async generation.
       examples: (typeof window!=='undefined' && window.WORD_EXAMPLES && window.WORD_EXAMPLES[(r.en||'').toLowerCase()])
@@ -1154,8 +1228,16 @@ function phonetic(w){
 function buildFullQuiz(words){
   const ws=(words||[]).slice(0,5);
   if(ws.length<2) return FULL_QUIZ;                 // not enough words -> keep demo
-  const ens=ws.map(w=>w.en);
-  const pickEnChoices=(i)=>{ const distract=_shuffle(ens.filter((_,j)=>j!==i)).slice(0,3); const ch=_shuffle([ws[i].en].concat(distract)); return { choices:ch, answer:ch.indexOf(ws[i].en) }; };
+  const unitEn=ws.map(w=>w.en);                     // the unit's own words -> never distractors
+  const unitAr=ws.map(w=>w.ar);
+  // CONFUSING English options: real curriculum words that LOOK like the answer,
+  // never the other 4 words the learner just studied.
+  const pickEnChoices=(i)=>{
+    let distract=distractEn(ws[i].en, unitEn, 3);
+    if(distract.length<3){ const seen={}; distract.forEach(d=>seen[d.toLowerCase()]=1);
+      _shuffle(unitEn).forEach(e=>{ if(distract.length<3 && e!==ws[i].en && !seen[e.toLowerCase()]){ seen[e.toLowerCase()]=1; distract.push(e); } }); }
+    const ch=_shuffle([ws[i].en].concat(distract)); return { choices:ch, answer:ch.indexOf(ws[i].en) };
+  };
   // assign a question TYPE to each of the 5 words (cycled so the mix is stable)
   const types=['meaning','reverse','spell','listen','meaning'];
   return ws.map((w,i)=>{
@@ -1163,10 +1245,13 @@ function buildFullQuiz(words){
     if(t==='spell') return { type:'spell', prompt:'اكتب الكلمة الإنجليزية اللي معناها:', word:w.ar, answer:String(w.en||'').toLowerCase() };
     if(t==='listen'){ const c=pickEnChoices(i); return { type:'listen', prompt:'اسمع، بعدين اختر الكلمة اللي سمعتها.', word:w.en, choices:c.choices, answer:c.answer }; }
     if(t==='reverse'){ const c=pickEnChoices(i); return { type:'reverse', prompt:'اختر الكلمة الإنجليزية الصح لـ:', word:w.ar, choices:c.choices, answer:c.answer }; }
-    // meaning: Arabic answer choices (reuse the word's meaningChoices if present)
+    // meaning: Arabic answer choices (reuse the word's confusing meaningChoices if present)
     if(Array.isArray(w.meaningChoices) && w.meaningChoices.length>=2 && typeof w.meaningAnswer==='number')
       return { type:'meaning', prompt:'وش معنى الكلمة؟', word:w.en, choices:w.meaningChoices, answer:w.meaningAnswer };
-    const ars=ws.map(x=>x.ar); const distract=_shuffle(ars.filter((_,j)=>j!==i)).slice(0,3); const ch=_shuffle([w.ar].concat(distract));
+    let distract=distractAr(w.ar, unitAr, 3, w.pos, w.level);
+    if(distract.length<3){ const seen={}; distract.forEach(d=>seen[d]=1);
+      _shuffle(unitAr).forEach(a=>{ if(distract.length<3 && a!==w.ar && !seen[a]){ seen[a]=1; distract.push(a); } }); }
+    const ch=_shuffle([w.ar].concat(distract));
     return { type:'meaning', prompt:'وش معنى الكلمة؟', word:w.en, choices:ch, answer:ch.indexOf(w.ar) };
   });
 }
@@ -2486,6 +2571,11 @@ function refreshLeaderboard(){
     if(!TB || !TB.enabled || typeof TB.getLeaderboard!=='function') return;
     // one-time: push an existing local photo to the server so it shows for others
     if(!app._avatarSynced && app.state.user && app.state.user.photo){ app._avatarSynced=true; try{ syncAvatarToServer(app.state.user.photo); }catch(_){} }
+    // one-time: push the local name so the leaderboard shows the REAL name (not the
+    // "متعلّم" fallback). Self-heals accounts whose name never persisted to the server.
+    if(!app._nameSynced && app.state.user && (app.state.user.name||'').trim() && typeof TB.saveDisplayName==='function'){
+      app._nameSynced=true; try{ TB.saveDisplayName(app.state.user.name); }catch(_){}
+    }
     // throttle: at most once per 30s so the notify()-triggered re-render of home
     // doesn't re-fire the fetch in a loop.
     const now=Date.now();
@@ -3256,6 +3346,17 @@ function syncAvatarToServer(dataUrl){
     img.src=dataUrl;
   }catch(_){}
 }
+/* Push the learner's display name to the account so the leaderboard shows their
+   REAL name for everyone (not the "متعلّم" fallback). Best-effort, like avatar sync. */
+function syncNameToServer(name){
+  try{
+    const TB=(typeof window!=='undefined')&&window.TalaqaBackend;
+    if(!(TB&&TB.enabled&&TB.saveDisplayName)) return;
+    const nm=(name||'').trim(); if(!nm) return;
+    app._nameSynced=true;   // we've now pushed the latest name; skip the load-time resync
+    TB.saveDisplayName(nm);
+  }catch(_){}
+}
 /* ===================== PROFILE HUB (read-first identity) ===================== */
 /* A compact stat tile used in the profile grid (mirrors the home statCard look). */
 /* ===================== SHAREABLE PROGRESS CARD (viral loop) ===================== */
@@ -3437,7 +3538,7 @@ SCREENS.profile_edit = (s)=>{
       img.src=rd.result; };
     rd.readAsDataURL(f);
   };
-  const save=()=>{ app.set({ user:Object.assign({}, s.user, { name:(nm||'').trim()||s.user.name, photo:photo }) }); syncAvatarToServer(photo); app._avatarSynced=true; toast('تم حفظ الملف الشخصي ✅'); go('profile',{},{resetStack:true}); };
+  const save=()=>{ const newName=(nm||'').trim()||s.user.name; app.set({ user:Object.assign({}, s.user, { name:newName, photo:photo }) }); syncAvatarToServer(photo); app._avatarSynced=true; syncNameToServer(newName); toast('تم حفظ الملف الشخصي ✅'); go('profile',{},{resetStack:true}); };
   return frame(
     statusBar(),
     lessonTop(0, 'عدّل حسابك', ()=>go('profile',{},{resetStack:true})),
@@ -3636,7 +3737,12 @@ function spellUI(cfg){
   const check=()=>{
     const v=(document.getElementById('spellInput')||{}).value||'';
     if(!v.trim()){ toast('اكتب الكلمة الأولى'); return; }
-    if(norm(v)===norm(cfg.answer)){ buzz(18); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'ok', spellVal:v}); }
+    const nv=norm(v), na=norm(cfg.answer);
+    // a near-miss (one space / one letter off; two for long words) is NOT wrong —
+    // it's "قريب": gentle yellow, show the correct spelling, let them continue.
+    const tol=na.length>=8?2:1;
+    if(nv===na){ buzz(18); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'ok', spellVal:v}); }
+    else if(nv && _editDist(nv,na)<=tol){ buzz(12); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'close', spellVal:v}); }
     else { buzz([10,40,10]); try{ SFX.wrong(); }catch(_){} if(cfg.onWrong){ try{ cfg.onWrong(); }catch(_){} } app.setUI({spellResult:'no', spellVal:v, spellTries:tries+1}); }
   };
   let bodyKids, foot;
@@ -3649,6 +3755,11 @@ function spellUI(cfg){
   if(res==='ok'){
     bodyKids=[ head, feedbackBox(true, cfg.answer, null) ];
     foot=bigBtn('كمّل', { bg:T.good, sh:T.goodD, pop:true, icon:'arrowL', onClick:cfg.onPass });
+  } else if(res==='close'){
+    bodyKids=[ head, feedbackBoxClose(cfg.answer, typed) ];
+    foot=h('div',{style:{ display:'flex', gap:'10px' }},
+      h('div',{style:{flex:1}}, bigBtn('جرّب مرة ثانية', { bg:'#fff', sh:T.line, color:T.Yink, iconBefore:'refresh', onClick:()=>app.setUI({spellResult:null}) })),
+      h('div',{style:{flex:1}}, bigBtn('كمّل', { bg:T.Y, sh:T.Yd, color:T.Yink, icon:'arrowL', onClick:cfg.onPass })));
   } else if(res==='no'){
     bodyKids=[ head, feedbackBox(false, cfg.answer, typed) ];
     foot=h('div',{style:{ display:'flex', gap:'10px' }},
@@ -3678,6 +3789,16 @@ function feedbackBox(ok, answer, typed){
     !ok && typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.bad, marginTop:'4px', textDecoration:'line-through' }}, typed) : null,
     h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'6px' }},'الكتابة الصحيحة:'),
     h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:ok?T.goodD:T.ink, marginTop:'2px' }}, answer));
+}
+/* "قريب" — a near-miss (one space / one letter off). Encouraging YELLOW, not red:
+   we don't mark it wrong, we show the correct spelling and let them carry on. */
+function feedbackBoxClose(answer, typed){
+  return h('div',{class:'pop', style:{ background:T.Ysoft, borderRadius:'20px', padding:'18px', textAlign:'center','--i':2 }},
+    h('div',{style:{ width:'52px', height:'52px', borderRadius:'50%', background:T.Yd, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 8px', fontSize:'28px', fontWeight:900, lineHeight:1 }},'≈'),
+    h('div',{style:{ fontWeight:900, fontSize:'17px', color:T.Yink }},'قريب جداً! 👏'),
+    typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.Yink, opacity:.75, marginTop:'4px' }}, typed) : null,
+    h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'6px' }},'الكتابة الصحيحة:'),
+    h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:T.Yink, marginTop:'2px' }}, answer));
 }
 SCREENS.word_spell = (s)=>{ const i=s.params.i||0, w=WORDS[i]; if(!w) return bounceFrame('إملاء');
   return spellUI({ word:w.ar, answer:w.en, audioWord:w.en, progress:wordProg(i,0.35), label:`إملاء • ${ar(i+1)}/${ar(WORDS.length)}`,
