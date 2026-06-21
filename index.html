@@ -3164,8 +3164,8 @@ function divider(){ return h('div',{style:{ height:'1.5px', background:T.line, m
 
 /* ===================== SUBSCRIPTION ===================== */
 const PLANS = {
-  yearly:  { id:'yearly',  ar:'سنوي',   price:999, per:'سنة',    tag:'أفضل عرض' },
-  monthly: { id:'monthly', ar:'شهري',   price:99,  per:'شهر',    tag:'الخيار الشهير' },
+  yearly:  { id:'yearly',  ar:'سنوي',   price:399, per:'سنة',    tag:'أفضل عرض' },
+  monthly: { id:'monthly', ar:'شهري',   price:49,  per:'شهر',    tag:'الخيار الشهير' },
   weekly:  { id:'weekly',  ar:'أسبوعي', price:29,  per:'أسبوع',  tag:null },
 };
 /* Premium entitlement = a paid `subscribed` flag OR an active referral-earned
@@ -3270,7 +3270,7 @@ SCREENS.paywall = (s)=>{
       h('span',{style:{ width:'24px', height:'24px', borderRadius:'50%', border:`2.5px solid ${on?T.P:'#cdd2ee'}`, background:on?T.P:'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}, on?ico('check',{size:14, sw:3, color:'#fff'}):null),
       h('div',{style:{ flex:1 }},
         h('div',{style:{ fontSize:'17px', fontWeight:900 }}, 'باقة '+p.ar),
-        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }}, p.id==='monthly'?'يتجدد كل شهر':p.id==='yearly'?'يتجدد كل سنة • وفّر ~١٦٪':'يتجدد كل أسبوع')),
+        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }}, p.id==='monthly'?'يتجدد كل شهر':p.id==='yearly'?'يتجدد كل سنة • وفّر ~٣٢٪':'يتجدد كل أسبوع')),
       h('div',{style:{ textAlign:'center', flexShrink:0 }},
         h('div',null, h('span',{class:'num', style:{ fontSize:'24px', color:T.PD }}, ar(p.price)), h('span',{style:{ fontSize:'12px', color:T.mut, fontWeight:800 }},' ريال')),
         h('div',{style:{ fontSize:'11px', color:T.faint, fontWeight:800 }},'/'+p.per)),
