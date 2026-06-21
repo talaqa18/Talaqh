@@ -40,23 +40,76 @@ function similarity(a: string, b: string): number {
   const L = Math.max(a.length, b.length) || 1;
   return 1 - levenshtein(a, b) / L;
 }
-// Best match of the expected text against the whole transcript or any single word.
+// ----------------------------------------------------------------------------
+// ACCENT TOLERANCE. Whisper transcribes what it HEARS, so an Arabic speaker's
+// natural accent (which neutralises sounds English distinguishes — p/b, v/f, the
+// interdental "th", and most vowel qualities) used to be transcribed as a near-word
+// ("three"->"tree", "very"->"berry", "this"->"dis") and then punished by raw string
+// distance. We fix that by scoring against a PHONETIC skeleton too, folding exactly
+// the distinctions accented-but-correct speech collapses, and taking the BEST of the
+// raw / folded / skeleton signals — leniency can only RAISE a correct attempt, never
+// rescue a genuinely different word (the whole-word/string match still has to be close).
+// ----------------------------------------------------------------------------
+// Fold the consonant confusions common to Arabic-accented English; vowels kept.
+function accentFold(s: string): string {
+  let x = norm(s).replace(/[^a-z\s]/g, "");
+  x = x
+    .replace(/tch/g, "ch").replace(/sch/g, "sh")
+    .replace(/ph/g, "f").replace(/gh/g, "").replace(/ck/g, "k")
+    .replace(/qu/g, "kw").replace(/wh/g, "w")
+    .replace(/th/g, "t")   // interdental -> t (also commonly s/z) : fold to one
+    .replace(/sh/g, "s").replace(/ch/g, "s")  // sh/ch <-> s
+    .replace(/x/g, "ks");
+  x = x
+    .replace(/p/g, "b")    // p <-> b
+    .replace(/v/g, "f")    // v <-> f
+    .replace(/z/g, "s")    // z <-> s
+    .replace(/g/g, "j")    // soft g <-> j
+    .replace(/c/g, "k").replace(/q/g, "k");
+  return x.replace(/(.)\1+/g, "$1").replace(/\s+/g, " ").trim();  // collapse doubles
+}
+// Coarse phonetic skeleton: accent-fold, fold the voiced interdental (the "th" in
+// "this", commonly heard as "d"), then collapse vowel runs (Arabic accents shift
+// vowel QUALITY the most) so only the consonant frame has to line up.
+function phon(s: string): string {
+  return accentFold(s).replace(/\s+/g, "").replace(/d/g, "t").replace(/[aeiou]+/g, "a").replace(/(.)\1+/g, "$1");
+}
+// Best similarity of `expected` vs the whole transcript or any single word, under a
+// given normalisation transform.
+function bestUnder(transcript: string, expected: string, tf: (s: string) => string): number {
+  const e = tf(expected);
+  if (!e) return 0;
+  let best = similarity(tf(transcript), e);
+  for (const w of transcript.split(/\s+/)) { if (!w) continue; const tw = tf(w); if (tw) best = Math.max(best, similarity(tw, e)); }
+  return best;
+}
+// 0-100 score: exact/substring -> 100, else the most forgiving of the three signals.
 function scoreOf(transcript: string, expected: string): number {
   const t = norm(transcript), e = norm(expected);
   if (!e) return 0;
   if (t === e || t.includes(e)) return 100;
-  let best = similarity(t, e);
-  for (const w of t.split(" ")) best = Math.max(best, similarity(w, e));
+  const best = Math.max(
+    bestUnder(transcript, expected, norm),
+    bestUnder(transcript, expected, accentFold),
+    bestUnder(transcript, expected, phon),
+  );
   return Math.round(Math.max(0, Math.min(1, best)) * 100);
 }
-// Per-word feedback: for each expected word, did ANY transcript word match it
-// closely? Lets the client highlight the actual mispronounced part (word-level).
+// Per-word feedback: for each expected word, did ANY transcript word match it closely
+// (under any signal)? Lets the client highlight the actual mispronounced part.
 function wordFeedback(transcript: string, expected: string): { word: string; ok: boolean }[] {
   const tWords = norm(transcript).split(" ").filter(Boolean);
   return norm(expected).split(" ").filter(Boolean).map((ew) => {
     let best = 0;
-    for (const tw of tWords) best = Math.max(best, similarity(ew, tw));
-    return { word: ew, ok: best >= 0.72 };
+    for (const tw of tWords) {
+      best = Math.max(
+        best,
+        similarity(ew, tw),
+        similarity(accentFold(ew), accentFold(tw)),
+        similarity(phon(ew), phon(tw)),
+      );
+    }
+    return { word: ew, ok: best >= 0.6 };
   });
 }
 
