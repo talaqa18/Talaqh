@@ -3714,7 +3714,12 @@ SCREENS.unit_hub = (s)=>{
   // bar doesn't read 5/5 (complete) while writing is still pending.
   const hasW=!!app._writing;
   const total=SECTION_ORDER.length+(hasW?1:0);
-  const done=sectionsDoneCount()+((hasW && s.sections.writing==='done')?1:0);
+  // Re-entering a chapter the learner already finished must show all sections as
+  // done (review state), not the reset/locked initial state — `sections` only
+  // tracks the CURRENT chapter, so switching away and back wipes it.
+  const isReviewed=!!(s.doneChapters||{})[s.currentChapter];
+  const done=isReviewed ? total
+    : sectionsDoneCount()+((hasW && s.sections.writing==='done')?1:0);
   return frame(
     statusBar(),
     lessonTop(done/total, UNIT.name, ()=>tabGo('journey')),
@@ -3732,7 +3737,7 @@ SCREENS.unit_hub = (s)=>{
       h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, padding:'2px 4px','--i':1 }},'كمّل الأقسام بالترتيب'),
       // sections
       ...sectionMeta().map((sec,idx)=>{
-        const st=s.sections[sec.id];
+        const st=isReviewed ? 'done' : s.sections[sec.id];
         return sectionRow(sec, st, idx+2);
       }),
       // optional bonus: writing — only for high levels (B1/B2/C1) once a generated chapter is loaded
