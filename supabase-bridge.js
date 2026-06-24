@@ -306,8 +306,10 @@ const TB = {
     const hues = [18, 250, 325, 160, 210, 40, 280];
     const rows = data.map((r, i) => ({
       rank: Number(r.rank),
-      name: r.display_name || "متعلّم",
-      initial: ((r.display_name || "؟").trim()[0]) || "؟",
+      // Prefer the server's real name; for the caller's own row, fall back to the
+      // locally-known name before the generic placeholder so "me" is never "متعلّم".
+      name: r.display_name || (r.is_me && this._localName) || "متعلّم",
+      initial: ((r.display_name || (r.is_me && this._localName) || "؟").trim()[0]) || "؟",
       pts: r.total_xp || 0,
       hue: hues[i % hues.length],
       avatar: r.avatar_url || null, // participant photo (shown in the leaderboard)
@@ -326,6 +328,23 @@ const TB = {
     if (!uid) { try { uid = (await sb.auth.getUser()).data.user?.id; } catch (_) {} }
     if (!uid) return false;
     try { const { error } = await sb.from("profiles").update({ avatar_url: url || null }).eq("id", uid); return !error; } catch (_) { return false; }
+  },
+
+  /** Persist the learner's display name to profiles so the leaderboard shows
+   *  their REAL name (not the "متعلّم" fallback) for everyone. Owner-writable
+   *  via RLS (display_name is a non-trusted column). Best-effort; self-heals
+   *  accounts whose name never persisted (e.g. a dropped onboarding call or a
+   *  phone sign-up with no email prefix). Remembers the local name so getLeaderboard
+   *  can label the caller's own row even before the write round-trips. */
+  async saveDisplayName(name) {
+    const nm = (name || "").trim();
+    if (nm) this._localName = nm;
+    const sb = await ensureClient();
+    if (!sb || !nm) return false;
+    let uid = this._user?.id;
+    if (!uid) { try { uid = (await sb.auth.getUser()).data.user?.id; } catch (_) {} }
+    if (!uid) return false;
+    try { const { error } = await sb.from("profiles").update({ display_name: nm }).eq("id", uid); return !error; } catch (_) { return false; }
   },
 
   // ---- Stage 2 strict path (used once content is hydrated with DB ids) ------

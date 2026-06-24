@@ -157,6 +157,8 @@
   .field:focus{border-color:var(--p); box-shadow:0 0 0 4px var(--psoft)}
   .field::placeholder{color:var(--faint); font-weight:600}
   .field.en{text-align:left}
+  @keyframes ccFade{from{opacity:0}to{opacity:1}}
+  @keyframes ccUp{from{transform:translateY(101%)}to{transform:translateY(0)}}
   .underwrong{ text-decoration: underline wavy var(--bad); text-decoration-thickness:2px; text-underline-offset:4px }
   .num{ font-weight:900; font-feature-settings:'tnum' 1; letter-spacing:.5px; font-variant-numeric:tabular-nums }
   .card3d{ border:2.5px solid var(--line); box-shadow:0 6px 0 var(--edge), 0 16px 26px -16px rgba(45,50,115,.34) }
@@ -176,6 +178,7 @@ const T_LIGHT = {
   bg:'#eef1ff', ink:'#20254f', mut:'#5b6090', faint:'#7e84bd',
   line:'#dde2ff', card:'#ffffff', edge:'#c9d0f5',
   Y:'#ffd43b', Yd:'#e6b800', CO:'#ff8787', COd:'#e86b6b',
+  Ysoft:'#fff5d6', Yink:'#8a6a00',
   good:'#1faf6a', goodD:'#178a54', goodSoft:'#ddf5ea',
   bad:'#ef5b6b', badSoft:'#ffe5e8',
   sh:'0 14px 26px -16px rgba(45,50,115,.34)',
@@ -191,6 +194,7 @@ const T_DARK = {
   bg:'#0e1220', ink:'#e8ecf4', mut:'#9aa3b5', faint:'#727c93',
   line:'#2a3140', card:'#1a1f29', edge:'#2a3140',
   Y:'#ffd43b', Yd:'#e0bb2e', CO:'#ff9a9a', COd:'#e07878',
+  Ysoft:'#3a3320', Yink:'#ffd43b',
   good:'#3fce8a', goodD:'#2faf73', goodSoft:'#16302a',
   bad:'#ff6b7b', badSoft:'#33212a',
   sh:'0 14px 26px -16px rgba(0,0,0,.6)',
@@ -608,6 +612,7 @@ const ICONS = {
   arrowR:(sw)=>`<path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
   chevL:(sw)=>`<path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
   chevR:(sw)=>`<path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  chevD:(sw)=>`<path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
   refresh:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 16"/><path d="M4 20v-4h4"/></g>`,
   plane:(sw)=>`<path d="M10.5 13.5L3 11l2-2 6 1 4-5a2 2 0 0 1 3 3l-5 4 1 6-2 2-2.5-7.5L7 17v-2.5z" fill="currentColor"/>`,
   brief:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="11" rx="2.5"/><path d="M9 8V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/></g>`,
@@ -619,6 +624,7 @@ const ICONS = {
   download:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10M8 10l4 4 4-4M5 19h14"/></g>`,
   logout:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2"/><path d="M10 12h10M17 9l3 3-3 3"/></g>`,
   edit:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19h14M7 15l9-9 2 2-9 9-3 1z"/></g>`,
+  eye:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></g>`,
   abc:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16l2.5-7L8 16M3.8 14h3.4M11 16V8h2.2a2 2 0 1 1 0 4H11m0 0h2.4a2 2 0 1 1 0 4H11M21 10a2 2 0 0 0-4 0v4a2 2 0 0 0 4 0"/></g>`,
   cards:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="13" height="13" rx="2.5"/><path d="M8 7V5.5A1.5 1.5 0 0 1 9.5 4H19a1.5 1.5 0 0 1 1.5 1.5V15a1.5 1.5 0 0 1-1.5 1.5H16"/></g>`,
   quiz:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 8.5l1.3 1.3 2.2-2.4M8.5 15l1.3 1.3 2.2-2.4M14.5 8.5h2M14.5 15h2"/></g>`,
@@ -1110,6 +1116,72 @@ const SCREENS = {};
 function _curr(){ return (typeof window!=='undefined') && window.CURRICULUM; }
 function _backend(){ return (typeof window!=='undefined') && window.TalaqaBackend; }
 function _shuffle(arr){ const a=arr.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
+/* Damerau-Levenshtein edit distance (counts an adjacent-letter swap as ONE edit,
+   so common typos like "recieve" read as close). Used for confusing distractors
+   and the spelling "قريب" near-match. */
+function _editDist(a,b){
+  a=String(a).toLowerCase(); b=String(b).toLowerCase();
+  const m=a.length, n=b.length;
+  if(!m) return n; if(!n) return m;
+  const d=[]; for(let i=0;i<=m;i++){ d[i]=[i]; } for(let j=0;j<=n;j++){ d[0][j]=j; }
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      const cost=a[i-1]===b[j-1]?0:1;
+      d[i][j]=Math.min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost);
+      if(i>1 && j>1 && a[i-1]===b[j-2] && a[i-2]===b[j-1]) d[i][j]=Math.min(d[i][j], d[i-2][j-2]+1);
+    }
+  }
+  return d[m][n];
+}
+/* Global distractor pool built once from the WHOLE curriculum, so quiz options can
+   be CONFUSING NEW words the learner didn't just study (not the unit's own 5). */
+let _DPOOL=null;
+function distractPool(){
+  if(_DPOOL) return _DPOOL;
+  const C=_curr(); const words=(C&&Array.isArray(C.words))?C.words:[];
+  const seenAr={}, seenEn={}, ar=[], en=[];
+  words.forEach(w=>{ if(!w) return;
+    const a=(w.ar||'').trim(), e=(w.en||'').trim(), pos=w.pos||'', lvl=w.level||'';
+    if(a && !seenAr[a]){ seenAr[a]=1; ar.push({ ar:a, pos, lvl }); }
+    if(e && !seenEn[e.toLowerCase()]){ seenEn[e.toLowerCase()]=1; en.push({ en:e, pos, lvl }); }
+  });
+  _DPOOL={ ar, en };
+  return _DPOOL;
+}
+/* n CONFUSING Arabic-meaning distractors from the whole curriculum, excluding the
+   answer + the unit's own meanings. Prefers same part-of-speech (and level) so the
+   options are plausible — the learner can't pick by "which one I just saw". */
+function distractAr(answerAr, excludeAr, n, pos, level){
+  const pool=distractPool().ar; if(!pool.length) return [];
+  const excl={}; (excludeAr||[]).forEach(a=>{ if(a) excl[String(a).trim()]=1; }); excl[String(answerAr).trim()]=1;
+  const cands=pool.filter(w=>!excl[w.ar]);
+  const t1=cands.filter(w=>pos&&w.pos===pos&&level&&w.lvl===level);  // same category + level
+  const t2=cands.filter(w=>pos&&w.pos===pos);                        // same category
+  const t3=cands;                                                    // anything else
+  const ordered=_shuffle(t1).concat(_shuffle(t2)).concat(_shuffle(t3));
+  const out=[], seen={};
+  for(const w of ordered){ if(out.length>=n) break; if(seen[w.ar]) continue; seen[w.ar]=1; out.push(w.ar); }
+  return out;
+}
+/* n CONFUSING English distractors — real curriculum words that LOOK like the answer
+   (similar spelling/length/first-letter) so the choice isn't obvious. */
+function distractEn(answerEn, excludeEn, n){
+  const pool=distractPool().en; if(!pool.length) return [];
+  const ans=String(answerEn||'').toLowerCase();
+  const excl={}; (excludeEn||[]).forEach(e=>{ if(e) excl[String(e).toLowerCase()]=1; }); excl[ans]=1;
+  const cands=pool.filter(w=>!excl[w.en.toLowerCase()]);
+  const scored=cands.map(w=>{ const e=w.en.toLowerCase();
+    let d=_editDist(ans,e);
+    if(e[0]===ans[0]) d-=0.6;                       // same starting letter -> looks alike
+    d+=Math.abs(e.length-ans.length)*0.3;           // similar length -> looks alike
+    return { en:w.en, d };
+  }).sort((a,b)=>a.d-b.d);
+  const top=scored.slice(0, Math.max(n*4, 12));     // a confusing top slice...
+  const out=[], seen={};
+  for(const w of _shuffle(top)){ if(out.length>=n) break; const k=w.en.toLowerCase(); if(seen[k]) continue; seen[k]=1; out.push(w.en); }
+  if(out.length<n){ for(const w of scored){ if(out.length>=n) break; const k=w.en.toLowerCase(); if(seen[k]) continue; seen[k]=1; out.push(w.en); } }
+  return out;
+}
 /* group a level's word rows into ordered chapters (preserving first-seen order) */
 function chaptersFor(level){
   const C=_curr(); if(!C || !Array.isArray(C.words)) return [];
@@ -1126,13 +1198,19 @@ function chaptersFor(level){
 /* map 5 raw curriculum rows -> the app's word shape */
 function mapWords(rawRows){
   const rows=rawRows.slice(0,5);
-  const allAr=rows.map(r=>r.ar);
+  const unitAr=rows.map(r=>r.ar);   // never offer the unit's own 5 meanings as distractors
   return rows.map((r,i)=>{
     const thisAr=r.ar;
-    const distractors=_shuffle(allAr.filter((_,j)=>j!==i)).slice(0,3);
+    // CONFUSING distractors: NEW words from the whole curriculum (same part-of-speech
+    // / level so they're plausible), not the other words the learner just studied.
+    let distractors=distractAr(thisAr, unitAr, 3, r.pos, r.level);
+    if(distractors.length<3){   // tiny/absent curriculum (demo, harness) -> old behavior
+      const seen={}; distractors.forEach(d=>seen[d]=1);
+      _shuffle(unitAr).forEach(a=>{ if(distractors.length<3 && a!==thisAr && !seen[a]){ seen[a]=1; distractors.push(a); } });
+    }
     const choices=_shuffle([thisAr].concat(distractors));
     return {
-      en:r.en, ar:r.ar, ipa:'', translit:r.phonetic||'',
+      en:r.en, ar:r.ar, ipa:'', translit:r.phonetic||'', pos:r.pos||'', level:r.level||'',
       // Prefer the PRE-GENERATED examples file (instant, 3 per word); fall back to
       // the curriculum's single example, then to async generation.
       examples: (typeof window!=='undefined' && window.WORD_EXAMPLES && window.WORD_EXAMPLES[(r.en||'').toLowerCase()])
@@ -1154,8 +1232,16 @@ function phonetic(w){
 function buildFullQuiz(words){
   const ws=(words||[]).slice(0,5);
   if(ws.length<2) return FULL_QUIZ;                 // not enough words -> keep demo
-  const ens=ws.map(w=>w.en);
-  const pickEnChoices=(i)=>{ const distract=_shuffle(ens.filter((_,j)=>j!==i)).slice(0,3); const ch=_shuffle([ws[i].en].concat(distract)); return { choices:ch, answer:ch.indexOf(ws[i].en) }; };
+  const unitEn=ws.map(w=>w.en);                     // the unit's own words -> never distractors
+  const unitAr=ws.map(w=>w.ar);
+  // CONFUSING English options: real curriculum words that LOOK like the answer,
+  // never the other 4 words the learner just studied.
+  const pickEnChoices=(i)=>{
+    let distract=distractEn(ws[i].en, unitEn, 3);
+    if(distract.length<3){ const seen={}; distract.forEach(d=>seen[d.toLowerCase()]=1);
+      _shuffle(unitEn).forEach(e=>{ if(distract.length<3 && e!==ws[i].en && !seen[e.toLowerCase()]){ seen[e.toLowerCase()]=1; distract.push(e); } }); }
+    const ch=_shuffle([ws[i].en].concat(distract)); return { choices:ch, answer:ch.indexOf(ws[i].en) };
+  };
   // assign a question TYPE to each of the 5 words (cycled so the mix is stable)
   const types=['meaning','reverse','spell','listen','meaning'];
   return ws.map((w,i)=>{
@@ -1163,10 +1249,13 @@ function buildFullQuiz(words){
     if(t==='spell') return { type:'spell', prompt:'اكتب الكلمة الإنجليزية اللي معناها:', word:w.ar, answer:String(w.en||'').toLowerCase() };
     if(t==='listen'){ const c=pickEnChoices(i); return { type:'listen', prompt:'اسمع، بعدين اختر الكلمة اللي سمعتها.', word:w.en, choices:c.choices, answer:c.answer }; }
     if(t==='reverse'){ const c=pickEnChoices(i); return { type:'reverse', prompt:'اختر الكلمة الإنجليزية الصح لـ:', word:w.ar, choices:c.choices, answer:c.answer }; }
-    // meaning: Arabic answer choices (reuse the word's meaningChoices if present)
+    // meaning: Arabic answer choices (reuse the word's confusing meaningChoices if present)
     if(Array.isArray(w.meaningChoices) && w.meaningChoices.length>=2 && typeof w.meaningAnswer==='number')
       return { type:'meaning', prompt:'وش معنى الكلمة؟', word:w.en, choices:w.meaningChoices, answer:w.meaningAnswer };
-    const ars=ws.map(x=>x.ar); const distract=_shuffle(ars.filter((_,j)=>j!==i)).slice(0,3); const ch=_shuffle([w.ar].concat(distract));
+    let distract=distractAr(w.ar, unitAr, 3, w.pos, w.level);
+    if(distract.length<3){ const seen={}; distract.forEach(d=>seen[d]=1);
+      _shuffle(unitAr).forEach(a=>{ if(distract.length<3 && a!==w.ar && !seen[a]){ seen[a]=1; distract.push(a); } }); }
+    const ch=_shuffle([w.ar].concat(distract));
     return { type:'meaning', prompt:'وش معنى الكلمة؟', word:w.en, choices:ch, answer:ch.indexOf(w.ar) };
   });
 }
@@ -1735,6 +1824,139 @@ SCREENS.splash = ()=> h('div',{class:'scr', style:{ background:'radial-gradient(
 );
 
 /* ===================== AUTH ===================== */
+/* All country dialing codes. Arab/Gulf countries are listed first (the app's
+   primary audience), then every other country sorted by Arabic name. Flags are
+   derived from the ISO code at runtime so we never hand-type emoji. */
+const COUNTRIES = [
+  {i:'SA',d:'+966',n:'السعودية'},{i:'AE',d:'+971',n:'الإمارات'},{i:'KW',d:'+965',n:'الكويت'},
+  {i:'QA',d:'+974',n:'قطر'},{i:'BH',d:'+973',n:'البحرين'},{i:'OM',d:'+968',n:'عُمان'},
+  {i:'EG',d:'+20',n:'مصر'},{i:'JO',d:'+962',n:'الأردن'},{i:'IQ',d:'+964',n:'العراق'},
+  {i:'SY',d:'+963',n:'سوريا'},{i:'LB',d:'+961',n:'لبنان'},{i:'PS',d:'+970',n:'فلسطين'},
+  {i:'YE',d:'+967',n:'اليمن'},{i:'SD',d:'+249',n:'السودان'},{i:'LY',d:'+218',n:'ليبيا'},
+  {i:'TN',d:'+216',n:'تونس'},{i:'DZ',d:'+213',n:'الجزائر'},{i:'MA',d:'+212',n:'المغرب'},
+  {i:'MR',d:'+222',n:'موريتانيا'},{i:'SO',d:'+252',n:'الصومال'},{i:'DJ',d:'+253',n:'جيبوتي'},
+  {i:'KM',d:'+269',n:'جزر القمر'},
+  {i:'AF',d:'+93',n:'أفغانستان'},{i:'AL',d:'+355',n:'ألبانيا'},{i:'AD',d:'+376',n:'أندورا'},
+  {i:'AO',d:'+244',n:'أنغولا'},{i:'AG',d:'+1268',n:'أنتيغوا وباربودا'},{i:'AR',d:'+54',n:'الأرجنتين'},
+  {i:'AM',d:'+374',n:'أرمينيا'},{i:'AU',d:'+61',n:'أستراليا'},{i:'AT',d:'+43',n:'النمسا'},
+  {i:'AZ',d:'+994',n:'أذربيجان'},{i:'BS',d:'+1242',n:'الباهاما'},{i:'BD',d:'+880',n:'بنغلاديش'},
+  {i:'BB',d:'+1246',n:'باربادوس'},{i:'BY',d:'+375',n:'بيلاروسيا'},{i:'BE',d:'+32',n:'بلجيكا'},
+  {i:'BZ',d:'+501',n:'بليز'},{i:'BJ',d:'+229',n:'بنين'},{i:'BT',d:'+975',n:'بوتان'},
+  {i:'BO',d:'+591',n:'بوليفيا'},{i:'BA',d:'+387',n:'البوسنة والهرسك'},{i:'BW',d:'+267',n:'بوتسوانا'},
+  {i:'BR',d:'+55',n:'البرازيل'},{i:'BN',d:'+673',n:'بروناي'},{i:'BG',d:'+359',n:'بلغاريا'},
+  {i:'BF',d:'+226',n:'بوركينا فاسو'},{i:'BI',d:'+257',n:'بوروندي'},{i:'CV',d:'+238',n:'الرأس الأخضر'},
+  {i:'KH',d:'+855',n:'كمبوديا'},{i:'CM',d:'+237',n:'الكاميرون'},{i:'CA',d:'+1',n:'كندا'},
+  {i:'CF',d:'+236',n:'أفريقيا الوسطى'},{i:'TD',d:'+235',n:'تشاد'},{i:'CL',d:'+56',n:'تشيلي'},
+  {i:'CN',d:'+86',n:'الصين'},{i:'CO',d:'+57',n:'كولومبيا'},{i:'CG',d:'+242',n:'الكونغو'},
+  {i:'CD',d:'+243',n:'الكونغو الديمقراطية'},{i:'CR',d:'+506',n:'كوستاريكا'},{i:'CI',d:'+225',n:'ساحل العاج'},
+  {i:'HR',d:'+385',n:'كرواتيا'},{i:'CU',d:'+53',n:'كوبا'},{i:'CY',d:'+357',n:'قبرص'},
+  {i:'CZ',d:'+420',n:'التشيك'},{i:'DK',d:'+45',n:'الدنمارك'},{i:'DM',d:'+1767',n:'دومينيكا'},
+  {i:'DO',d:'+1809',n:'الدومينيكان'},{i:'EC',d:'+593',n:'الإكوادور'},{i:'SV',d:'+503',n:'السلفادور'},
+  {i:'GQ',d:'+240',n:'غينيا الاستوائية'},{i:'ER',d:'+291',n:'إريتريا'},{i:'EE',d:'+372',n:'إستونيا'},
+  {i:'SZ',d:'+268',n:'إسواتيني'},{i:'ET',d:'+251',n:'إثيوبيا'},{i:'FJ',d:'+679',n:'فيجي'},
+  {i:'FI',d:'+358',n:'فنلندا'},{i:'FR',d:'+33',n:'فرنسا'},{i:'GA',d:'+241',n:'الغابون'},
+  {i:'GM',d:'+220',n:'غامبيا'},{i:'GE',d:'+995',n:'جورجيا'},{i:'DE',d:'+49',n:'ألمانيا'},
+  {i:'GH',d:'+233',n:'غانا'},{i:'GR',d:'+30',n:'اليونان'},{i:'GD',d:'+1473',n:'غرينادا'},
+  {i:'GT',d:'+502',n:'غواتيمالا'},{i:'GN',d:'+224',n:'غينيا'},{i:'GW',d:'+245',n:'غينيا بيساو'},
+  {i:'GY',d:'+592',n:'غيانا'},{i:'HT',d:'+509',n:'هايتي'},{i:'HN',d:'+504',n:'هندوراس'},
+  {i:'HU',d:'+36',n:'المجر'},{i:'IS',d:'+354',n:'آيسلندا'},{i:'IN',d:'+91',n:'الهند'},
+  {i:'ID',d:'+62',n:'إندونيسيا'},{i:'IR',d:'+98',n:'إيران'},{i:'IE',d:'+353',n:'أيرلندا'},
+  {i:'IT',d:'+39',n:'إيطاليا'},{i:'JM',d:'+1876',n:'جامايكا'},{i:'JP',d:'+81',n:'اليابان'},
+  {i:'KZ',d:'+7',n:'كازاخستان'},{i:'KE',d:'+254',n:'كينيا'},{i:'KI',d:'+686',n:'كيريباتي'},
+  {i:'KP',d:'+850',n:'كوريا الشمالية'},{i:'KR',d:'+82',n:'كوريا الجنوبية'},{i:'KG',d:'+996',n:'قيرغيزستان'},
+  {i:'LA',d:'+856',n:'لاوس'},{i:'LV',d:'+371',n:'لاتفيا'},{i:'LS',d:'+266',n:'ليسوتو'},
+  {i:'LR',d:'+231',n:'ليبيريا'},{i:'LI',d:'+423',n:'ليختنشتاين'},{i:'LT',d:'+370',n:'ليتوانيا'},
+  {i:'LU',d:'+352',n:'لوكسمبورغ'},{i:'MG',d:'+261',n:'مدغشقر'},{i:'MW',d:'+265',n:'مالاوي'},
+  {i:'MY',d:'+60',n:'ماليزيا'},{i:'MV',d:'+960',n:'المالديف'},{i:'ML',d:'+223',n:'مالي'},
+  {i:'MT',d:'+356',n:'مالطا'},{i:'MH',d:'+692',n:'جزر مارشال'},{i:'MU',d:'+230',n:'موريشيوس'},
+  {i:'MX',d:'+52',n:'المكسيك'},{i:'FM',d:'+691',n:'ميكرونيزيا'},{i:'MD',d:'+373',n:'مولدوفا'},
+  {i:'MC',d:'+377',n:'موناكو'},{i:'MN',d:'+976',n:'منغوليا'},{i:'ME',d:'+382',n:'الجبل الأسود'},
+  {i:'MZ',d:'+258',n:'موزمبيق'},{i:'MM',d:'+95',n:'ميانمار'},{i:'NA',d:'+264',n:'ناميبيا'},
+  {i:'NR',d:'+674',n:'ناورو'},{i:'NP',d:'+977',n:'نيبال'},{i:'NL',d:'+31',n:'هولندا'},
+  {i:'NZ',d:'+64',n:'نيوزيلندا'},{i:'NI',d:'+505',n:'نيكاراغوا'},{i:'NE',d:'+227',n:'النيجر'},
+  {i:'NG',d:'+234',n:'نيجيريا'},{i:'MK',d:'+389',n:'مقدونيا الشمالية'},{i:'NO',d:'+47',n:'النرويج'},
+  {i:'PK',d:'+92',n:'باكستان'},{i:'PW',d:'+680',n:'بالاو'},{i:'PA',d:'+507',n:'بنما'},
+  {i:'PG',d:'+675',n:'بابوا غينيا الجديدة'},{i:'PY',d:'+595',n:'باراغواي'},{i:'PE',d:'+51',n:'بيرو'},
+  {i:'PH',d:'+63',n:'الفلبين'},{i:'PL',d:'+48',n:'بولندا'},{i:'PT',d:'+351',n:'البرتغال'},
+  {i:'RO',d:'+40',n:'رومانيا'},{i:'RU',d:'+7',n:'روسيا'},{i:'RW',d:'+250',n:'رواندا'},
+  {i:'KN',d:'+1869',n:'سانت كيتس ونيفيس'},{i:'LC',d:'+1758',n:'سانت لوسيا'},{i:'VC',d:'+1784',n:'سانت فنسنت'},
+  {i:'WS',d:'+685',n:'ساموا'},{i:'SM',d:'+378',n:'سان مارينو'},{i:'ST',d:'+239',n:'ساو تومي وبرينسيب'},
+  {i:'SN',d:'+221',n:'السنغال'},{i:'RS',d:'+381',n:'صربيا'},{i:'SC',d:'+248',n:'سيشل'},
+  {i:'SL',d:'+232',n:'سيراليون'},{i:'SG',d:'+65',n:'سنغافورة'},{i:'SK',d:'+421',n:'سلوفاكيا'},
+  {i:'SI',d:'+386',n:'سلوفينيا'},{i:'SB',d:'+677',n:'جزر سليمان'},{i:'ZA',d:'+27',n:'جنوب أفريقيا'},
+  {i:'SS',d:'+211',n:'جنوب السودان'},{i:'ES',d:'+34',n:'إسبانيا'},{i:'LK',d:'+94',n:'سريلانكا'},
+  {i:'SR',d:'+597',n:'سورينام'},{i:'SE',d:'+46',n:'السويد'},{i:'CH',d:'+41',n:'سويسرا'},
+  {i:'TW',d:'+886',n:'تايوان'},{i:'TJ',d:'+992',n:'طاجيكستان'},{i:'TZ',d:'+255',n:'تنزانيا'},
+  {i:'TH',d:'+66',n:'تايلاند'},{i:'TL',d:'+670',n:'تيمور الشرقية'},{i:'TG',d:'+228',n:'توغو'},
+  {i:'TO',d:'+676',n:'تونغا'},{i:'TT',d:'+1868',n:'ترينيداد وتوباغو'},{i:'TR',d:'+90',n:'تركيا'},
+  {i:'TM',d:'+993',n:'تركمانستان'},{i:'TV',d:'+688',n:'توفالو'},{i:'UG',d:'+256',n:'أوغندا'},
+  {i:'UA',d:'+380',n:'أوكرانيا'},{i:'GB',d:'+44',n:'المملكة المتحدة'},{i:'US',d:'+1',n:'الولايات المتحدة'},
+  {i:'UY',d:'+598',n:'أوروغواي'},{i:'UZ',d:'+998',n:'أوزبكستان'},{i:'VU',d:'+678',n:'فانواتو'},
+  {i:'VE',d:'+58',n:'فنزويلا'},{i:'VN',d:'+84',n:'فيتنام'},{i:'ZM',d:'+260',n:'زامبيا'},
+  {i:'ZW',d:'+263',n:'زيمبابوي'},
+];
+const CC_ARAB_ISO = ['SA','AE','KW','QA','BH','OM','EG','JO','IQ','SY','LB','PS','YE','SD','LY','TN','DZ','MA','MR','SO','DJ','KM'];
+const CC_MAP = {}; COUNTRIES.forEach(c=>{ CC_MAP[c.i]=c; });
+const CC_ORDERED = CC_ARAB_ISO.map(i=>CC_MAP[i]).filter(Boolean)
+  .concat([{sep:true}])
+  .concat(COUNTRIES.filter(c=>CC_ARAB_ISO.indexOf(c.i)===-1).sort((a,b)=>a.n.localeCompare(b.n,'ar')));
+/* ISO 3166 alpha-2 -> flag emoji (regional indicator pair). */
+function flagOf(iso){ return String(iso||'').toUpperCase().replace(/[A-Z]/g, ch=>String.fromCodePoint(127397+ch.charCodeAt(0))); }
+/* Crisp flag IMAGE from flagcdn (Windows ships no flag-emoji font, so emoji
+   render as bare letters there). Falls back to the emoji flag if the image fails
+   to load (offline / CDN down). It's cross-origin, so the service worker passes
+   it straight to the network (uncached) — see sw.js. */
+function flagImg(iso, sz){
+  const w=(sz&&sz.w)||28, ht=(sz&&sz.h)||20, code=String(iso||'').toLowerCase();
+  return h('img',{ src:`https://flagcdn.com/w80/${code}.png`, alt:'', loading:'lazy', decoding:'async',
+    style:{ width:w+'px', height:ht+'px', objectFit:'cover', borderRadius:'4px', flexShrink:0, boxShadow:'0 0 0 1px rgba(0,0,0,.10)', display:'block' },
+    onError:(e)=>{ try{ const t=e.target; if(t._fb) return; t._fb=1; t.replaceWith(h('span',{ style:{ fontSize:(ht-1)+'px', lineHeight:1, flexShrink:0 } }, flagOf(iso))); }catch(_){ } } });
+}
+/* On-brand country picker — a bottom sheet that slides up over the login screen
+   (opened via s.ui.ccOpen). Replaces the OS <select> dropdown: searchable, with
+   flag / Arabic name / dial-code rows, the current pick highlighted in emerald. */
+function countrySheet(s){
+  const sel = s.ui.ccISO || 'SA';
+  const q = String(s.ui.ccSearch||'').trim().toLowerCase();
+  const close = ()=>app.setUI({ ccOpen:false });
+  const pick = iso => { const o=CC_MAP[iso]; if(o) app.setUI({ ccISO:o.i, cc:o.d, ccOpen:false, ccSearch:'' }); };
+  const row = c => h('button',{ class:'press', type:'button', onClick:()=>pick(c.i),
+    style:{ width:'100%', display:'flex', alignItems:'center', gap:'12px', textAlign:'start',
+      background: c.i===sel ? T.Psoft : 'transparent', border:'none', borderRadius:'14px', padding:'12px 14px', cursor:'pointer' } },
+    flagImg(c.i, {w:30, h:21}),
+    h('span',{ style:{ flex:1, fontWeight:800, fontSize:'15px', color: c.i===sel ? T.PD : T.ink } }, c.n),
+    h('span',{ class:'en', style:{ fontWeight:800, fontSize:'14px', color:T.mut, direction:'ltr' } }, c.d),
+    c.i===sel ? ico('check',{ size:18, sw:3, color:T.P }) : null);
+  const label = t => h('div',{ style:{ fontSize:'12px', fontWeight:900, color:T.faint, padding:'12px 14px 4px' } }, t);
+  let listKids;
+  if(q){
+    const norm = v => String(v).toLowerCase();
+    const found = CC_ORDERED.filter(c=>!c.sep && (norm(c.n).includes(q) || norm(c.d).includes(q) || norm(c.i).includes(q)));
+    listKids = found.length ? found.map(row)
+      : [ h('div',{style:{ textAlign:'center', color:T.mut, fontWeight:700, padding:'28px 14px' }}, 'ما فيه نتيجة 🤷') ];
+  } else {
+    const arab = CC_ARAB_ISO.map(i=>CC_MAP[i]).filter(Boolean);
+    const rest = CC_ORDERED.filter(c=>!c.sep && CC_ARAB_ISO.indexOf(c.i)===-1);
+    listKids = [ label('الدول العربية'), ...arab.map(row), label('كل الدول'), ...rest.map(row) ];
+  }
+  return h('div',{ style:{ position:'absolute', inset:0, zIndex:60, display:'flex', flexDirection:'column', justifyContent:'flex-end' } },
+    h('div',{ onClick:close, style:{ position:'absolute', inset:0, background:'rgba(18,18,45,.45)', animation:'ccFade .2s ease both' } }),
+    h('div',{ style:{ position:'relative', background:T.card, borderTopLeftRadius:'26px', borderTopRightRadius:'26px',
+        maxHeight:'82%', display:'flex', flexDirection:'column', overflow:'hidden',
+        boxShadow:'0 -12px 40px -10px rgba(20,20,55,.45)', animation:'ccUp .28s cubic-bezier(.22,1,.36,1) both',
+        paddingBottom:'calc(8px + env(safe-area-inset-bottom))' } },
+      h('div',{ style:{ width:'42px', height:'5px', borderRadius:'99px', background:T.line, margin:'10px auto 2px', flexShrink:0 } }),
+      h('div',{ style:{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 16px 8px', flexShrink:0 } },
+        h('div',{ style:{ fontSize:'18px', fontWeight:900, color:T.ink } }, 'اختر الدولة'),
+        h('button',{ class:'press', type:'button', 'aria-label':'إغلاق', onClick:close,
+          style:{ width:'34px', height:'34px', borderRadius:'50%', background:T.bg, display:'flex', alignItems:'center', justifyContent:'center', border:'none', cursor:'pointer' } }, ico('x',{ size:17, sw:2.6, color:T.mut }))),
+      h('div',{ style:{ padding:'0 16px 10px', flexShrink:0 } },
+        h('input',{ id:'cc_search', class:'field', dir:'rtl', placeholder:'ابحث عن دولة أو رمز…', value:s.ui.ccSearch||'',
+          autocapitalize:'none', autocorrect:'off', spellcheck:'false',
+          onInput:(e)=>app.setUI({ ccSearch:e.target.value }),
+          style:{ fontSize:'15px', padding:'12px 14px' } })),
+      h('div',{ class:'scroll', style:{ flex:1, minHeight:0, padding:'0 10px 6px', display:'flex', flexDirection:'column' } }, ...listKids)));
+}
 SCREENS.auth = (s)=>{
   const codeStep = s.ui.authStep==='code';
   const busy = !!s.ui.authBusy;
@@ -1811,11 +2033,21 @@ SCREENS.auth = (s)=>{
         ? h('span',null,'أرسلنا رمزًا إلى ', h('span',{class:'en', style:{ direction:'ltr', display:'inline-block', fontWeight:800, color:T.ink }}, s.ui.authPhone||''))
         : 'نتحقق منك عن طريق رمز بالجوال'));
 
-  // PHONE STEP body: country code (right, RTL) + phone number (fills)
+  // PHONE STEP body: the row is forced LTR so the country-code picker sits on the
+  // LEFT and the number fills the rest on its right (natural "+966 5XXXXXXXX" order).
+  // The picker opens a custom on-brand bottom sheet (countrySheet) instead of the
+  // OS <select> dropdown — searchable, with flag/name/dial-code rows.
+  const ccISO = s.ui.ccISO || 'SA';
+  const ccObj = CC_MAP[ccISO] || CC_MAP.SA;
+  const ccTrigger = h('button',{ class:'press', type:'button', 'aria-label':'رمز الدولة', onClick:()=>app.setUI({ ccOpen:true, ccSearch:'' }),
+    style:{ width:'118px', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', gap:'7px',
+      background:'#fff', border:`2px solid ${T.line}`, borderRadius:'16px', padding:'15px 8px', cursor:'pointer' } },
+    flagImg(ccObj.i, {w:26, h:18}),
+    h('span',{ class:'en', style:{ fontWeight:800, fontSize:'16px', color:T.ink } }, ccObj.d),
+    ico('chevD',{ size:15, sw:2.5, color:T.mut }));
   const phoneBody = h('div',{style:{ display:'flex', flexDirection:'column', gap:'12px','--i':1 }},
-    h('div',{style:{ display:'flex', gap:'8px' }},
-      h('input',{ id:'f_cc', class:'field en', value:s.ui.cc||'+966', readonly:true, dir:'ltr',
-        style:{ width:'82px', flexShrink:0, textAlign:'center', fontWeight:800 } }),
+    h('div',{style:{ display:'flex', gap:'8px', direction:'ltr' }},
+      ccTrigger,
       h('input',{ id:'f_phone', type:'tel', inputmode:'numeric', class:'field en', dir:'ltr', placeholder:'5XXXXXXXX',
         value:s.ui.phoneNum||'', onInput:(e)=>{ app.state.ui.phoneNum=String(e.target.value||'').replace(/[^0-9]/g,''); },
         style:{ flex:1, textAlign:'left' } })));
@@ -1838,7 +2070,8 @@ SCREENS.auth = (s)=>{
     footer(
       bigBtn(busy ? 'شوي...' : (codeStep?'دخول':'أرسل الرمز'), { onClick:(codeStep?verify:sendCode), icon:'arrowL', disabled:busy }),
       h('div',{style:{ textAlign:'center', color:T.faint, fontSize:'12px', fontWeight:700, marginTop:'12px' }},'بالمتابعة، أنت توافق على الشروط وسياسة الخصوصية')
-    )
+    ),
+    (!codeStep && s.ui.ccOpen) ? countrySheet(s) : null
   );
 };
 function fieldRow(icn, id, ph, type, en){
@@ -2486,6 +2719,11 @@ function refreshLeaderboard(){
     if(!TB || !TB.enabled || typeof TB.getLeaderboard!=='function') return;
     // one-time: push an existing local photo to the server so it shows for others
     if(!app._avatarSynced && app.state.user && app.state.user.photo){ app._avatarSynced=true; try{ syncAvatarToServer(app.state.user.photo); }catch(_){} }
+    // one-time: push the local name so the leaderboard shows the REAL name (not the
+    // "متعلّم" fallback). Self-heals accounts whose name never persisted to the server.
+    if(!app._nameSynced && app.state.user && (app.state.user.name||'').trim() && typeof TB.saveDisplayName==='function'){
+      app._nameSynced=true; try{ TB.saveDisplayName(app.state.user.name); }catch(_){}
+    }
     // throttle: at most once per 30s so the notify()-triggered re-render of home
     // doesn't re-fire the fetch in a loop.
     const now=Date.now();
@@ -3074,8 +3312,8 @@ function divider(){ return h('div',{style:{ height:'1.5px', background:T.line, m
 
 /* ===================== SUBSCRIPTION ===================== */
 const PLANS = {
-  yearly:  { id:'yearly',  ar:'سنوي',   price:999, per:'سنة',    tag:'أفضل عرض' },
-  monthly: { id:'monthly', ar:'شهري',   price:99,  per:'شهر',    tag:'الخيار الشهير' },
+  yearly:  { id:'yearly',  ar:'سنوي',   price:399, per:'سنة',    tag:'أفضل عرض' },
+  monthly: { id:'monthly', ar:'شهري',   price:49,  per:'شهر',    tag:'الخيار الشهير' },
   weekly:  { id:'weekly',  ar:'أسبوعي', price:29,  per:'أسبوع',  tag:null },
 };
 /* Premium entitlement = a paid `subscribed` flag OR an active referral-earned
@@ -3180,7 +3418,7 @@ SCREENS.paywall = (s)=>{
       h('span',{style:{ width:'24px', height:'24px', borderRadius:'50%', border:`2.5px solid ${on?T.P:'#cdd2ee'}`, background:on?T.P:'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}, on?ico('check',{size:14, sw:3, color:'#fff'}):null),
       h('div',{style:{ flex:1 }},
         h('div',{style:{ fontSize:'17px', fontWeight:900 }}, 'باقة '+p.ar),
-        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }}, p.id==='monthly'?'يتجدد كل شهر':p.id==='yearly'?'يتجدد كل سنة • وفّر ~١٦٪':'يتجدد كل أسبوع')),
+        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }}, p.id==='monthly'?'يتجدد كل شهر':p.id==='yearly'?'يتجدد كل سنة • وفّر ~٣٢٪':'يتجدد كل أسبوع')),
       h('div',{style:{ textAlign:'center', flexShrink:0 }},
         h('div',null, h('span',{class:'num', style:{ fontSize:'24px', color:T.PD }}, ar(p.price)), h('span',{style:{ fontSize:'12px', color:T.mut, fontWeight:800 }},' ريال')),
         h('div',{style:{ fontSize:'11px', color:T.faint, fontWeight:800 }},'/'+p.per)),
@@ -3254,6 +3492,17 @@ function syncAvatarToServer(dataUrl){
       }catch(_){ try{ TB.saveAvatar(dataUrl); }catch(_2){} } };
     img.onerror=()=>{ try{ TB.saveAvatar(dataUrl); }catch(_){} };
     img.src=dataUrl;
+  }catch(_){}
+}
+/* Push the learner's display name to the account so the leaderboard shows their
+   REAL name for everyone (not the "متعلّم" fallback). Best-effort, like avatar sync. */
+function syncNameToServer(name){
+  try{
+    const TB=(typeof window!=='undefined')&&window.TalaqaBackend;
+    if(!(TB&&TB.enabled&&TB.saveDisplayName)) return;
+    const nm=(name||'').trim(); if(!nm) return;
+    app._nameSynced=true;   // we've now pushed the latest name; skip the load-time resync
+    TB.saveDisplayName(nm);
   }catch(_){}
 }
 /* ===================== PROFILE HUB (read-first identity) ===================== */
@@ -3437,7 +3686,7 @@ SCREENS.profile_edit = (s)=>{
       img.src=rd.result; };
     rd.readAsDataURL(f);
   };
-  const save=()=>{ app.set({ user:Object.assign({}, s.user, { name:(nm||'').trim()||s.user.name, photo:photo }) }); syncAvatarToServer(photo); app._avatarSynced=true; toast('تم حفظ الملف الشخصي ✅'); go('profile',{},{resetStack:true}); };
+  const save=()=>{ const newName=(nm||'').trim()||s.user.name; app.set({ user:Object.assign({}, s.user, { name:newName, photo:photo }) }); syncAvatarToServer(photo); app._avatarSynced=true; syncNameToServer(newName); toast('تم حفظ الملف الشخصي ✅'); go('profile',{},{resetStack:true}); };
   return frame(
     statusBar(),
     lessonTop(0, 'عدّل حسابك', ()=>go('profile',{},{resetStack:true})),
@@ -3465,7 +3714,12 @@ SCREENS.unit_hub = (s)=>{
   // bar doesn't read 5/5 (complete) while writing is still pending.
   const hasW=!!app._writing;
   const total=SECTION_ORDER.length+(hasW?1:0);
-  const done=sectionsDoneCount()+((hasW && s.sections.writing==='done')?1:0);
+  // Re-entering a chapter the learner already finished must show all sections as
+  // done (review state), not the reset/locked initial state — `sections` only
+  // tracks the CURRENT chapter, so switching away and back wipes it.
+  const isReviewed=!!(s.doneChapters||{})[s.currentChapter];
+  const done=isReviewed ? total
+    : sectionsDoneCount()+((hasW && s.sections.writing==='done')?1:0);
   return frame(
     statusBar(),
     lessonTop(done/total, UNIT.name, ()=>tabGo('journey')),
@@ -3483,7 +3737,7 @@ SCREENS.unit_hub = (s)=>{
       h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, padding:'2px 4px','--i':1 }},'كمّل الأقسام بالترتيب'),
       // sections
       ...sectionMeta().map((sec,idx)=>{
-        const st=s.sections[sec.id];
+        const st=isReviewed ? 'done' : s.sections[sec.id];
         return sectionRow(sec, st, idx+2);
       }),
       // optional bonus: writing — only for high levels (B1/B2/C1) once a generated chapter is loaded
@@ -3636,8 +3890,13 @@ function spellUI(cfg){
   const check=()=>{
     const v=(document.getElementById('spellInput')||{}).value||'';
     if(!v.trim()){ toast('اكتب الكلمة الأولى'); return; }
-    if(norm(v)===norm(cfg.answer)){ buzz(18); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'ok', spellVal:v}); }
-    else { buzz([10,40,10]); try{ SFX.wrong(); }catch(_){} if(cfg.onWrong){ try{ cfg.onWrong(); }catch(_){} } app.setUI({spellResult:'no', spellVal:v, spellTries:tries+1}); }
+    const nv=norm(v), na=norm(cfg.answer);
+    // a near-miss (one space / one letter off; two for long words) is NOT wrong —
+    // it's "قريب": gentle yellow, show the correct spelling, let them continue.
+    const tol=na.length>=8?2:1;
+    if(nv===na){ buzz(18); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'ok', spellVal:v}); }
+    else if(nv && _editDist(nv,na)<=tol){ buzz(12); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'close', spellVal:v}); }
+    else { buzz([10,40,10]); try{ SFX.wrong(); }catch(_){} if(cfg.onWrong){ try{ cfg.onWrong(); }catch(_){} } app.setUI({spellResult:'no', spellVal:v, spellTries:tries+1, spellReveal:false}); }
   };
   let bodyKids, foot;
   const head = card({ style:{'--i':1} },
@@ -3649,10 +3908,15 @@ function spellUI(cfg){
   if(res==='ok'){
     bodyKids=[ head, feedbackBox(true, cfg.answer, null) ];
     foot=bigBtn('كمّل', { bg:T.good, sh:T.goodD, pop:true, icon:'arrowL', onClick:cfg.onPass });
-  } else if(res==='no'){
-    bodyKids=[ head, feedbackBox(false, cfg.answer, typed) ];
+  } else if(res==='close'){
+    bodyKids=[ head, feedbackBoxClose(cfg.answer, typed) ];
     foot=h('div',{style:{ display:'flex', gap:'10px' }},
-      h('div',{style:{flex:1}}, bigBtn('جرّب مرة ثانية', { bg:'#fff', sh:T.line, color:T.P, iconBefore:'refresh', onClick:()=>app.setUI({spellResult:null}) })),
+      h('div',{style:{flex:1}}, bigBtn('جرّب مرة ثانية', { bg:'#fff', sh:T.line, color:T.Yink, iconBefore:'refresh', onClick:()=>app.setUI({spellResult:null}) })),
+      h('div',{style:{flex:1}}, bigBtn('كمّل', { bg:T.Y, sh:T.Yd, color:T.Yink, icon:'arrowL', onClick:cfg.onPass })));
+  } else if(res==='no'){
+    bodyKids=[ head, feedbackBoxWrong(cfg.answer, typed, !!s.ui.spellReveal, ()=>app.setUI({spellReveal:true})) ];
+    foot=h('div',{style:{ display:'flex', gap:'10px' }},
+      h('div',{style:{flex:1}}, bigBtn('جرّب مرة ثانية', { bg:'#fff', sh:T.line, color:T.P, iconBefore:'refresh', onClick:()=>app.setUI({spellResult:null, spellReveal:false}) })),
       h('div',{style:{flex:1}}, bigBtn('كمّل', { icon:'arrowL', onClick:cfg.onPass })));
   } else {
     bodyKids=[ head,
@@ -3678,6 +3942,32 @@ function feedbackBox(ok, answer, typed){
     !ok && typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.bad, marginTop:'4px', textDecoration:'line-through' }}, typed) : null,
     h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'6px' }},'الكتابة الصحيحة:'),
     h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:ok?T.goodD:T.ink, marginTop:'2px' }}, answer));
+}
+/* WRONG — unlike feedbackBox we do NOT reveal the answer outright. Encourage with
+   "حاول مرة أخرى" and keep the correct spelling hidden behind a "شوف الكلمة" button;
+   only after the learner taps it do we show the word (same reveal styling as above). */
+function feedbackBoxWrong(answer, typed, revealed, onReveal){
+  return h('div',{class:'pop', style:{ background:T.badSoft, borderRadius:'20px', padding:'18px', textAlign:'center','--i':2 }},
+    h('div',{style:{ width:'52px', height:'52px', borderRadius:'50%', background:T.bad, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 8px' }}, ico('x',{size:28, sw:3})),
+    h('div',{style:{ fontWeight:900, fontSize:'17px', color:T.bad }},'حاول مرة أخرى'),
+    typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.bad, marginTop:'4px', textDecoration:'line-through' }}, typed) : null,
+    revealed
+      ? h('div',{class:'pop'},
+          h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'10px' }},'الكتابة الصحيحة:'),
+          h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:T.ink, marginTop:'2px' }}, answer))
+      : h('button',{class:'press btn3d', onClick:onReveal, style:{ marginTop:'14px', display:'inline-flex', alignItems:'center', gap:'7px',
+          background:T.card, color:T.bad, fontWeight:900, fontSize:'14px', padding:'11px 20px', borderRadius:'14px', boxShadow:`0 4px 0 ${T.edge}` }},
+          ico('eye',{size:18, sw:2.4}), h('span',null,'شوف الكلمة')));
+}
+/* "قريب" — a near-miss (one space / one letter off). Encouraging YELLOW, not red:
+   we don't mark it wrong, we show the correct spelling and let them carry on. */
+function feedbackBoxClose(answer, typed){
+  return h('div',{class:'pop', style:{ background:T.Ysoft, borderRadius:'20px', padding:'18px', textAlign:'center','--i':2 }},
+    h('div',{style:{ width:'52px', height:'52px', borderRadius:'50%', background:T.Yd, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 8px', fontSize:'28px', fontWeight:900, lineHeight:1 }},'≈'),
+    h('div',{style:{ fontWeight:900, fontSize:'17px', color:T.Yink }},'قريب جداً! 👏'),
+    typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.Yink, opacity:.75, marginTop:'4px' }}, typed) : null,
+    h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'6px' }},'الكتابة الصحيحة:'),
+    h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:T.Yink, marginTop:'2px' }}, answer));
 }
 SCREENS.word_spell = (s)=>{ const i=s.params.i||0, w=WORDS[i]; if(!w) return bounceFrame('إملاء');
   return spellUI({ word:w.ar, answer:w.en, audioWord:w.en, progress:wordProg(i,0.35), label:`إملاء • ${ar(i+1)}/${ar(WORDS.length)}`,
