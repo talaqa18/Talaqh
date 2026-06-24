@@ -157,6 +157,8 @@
   .field:focus{border-color:var(--p); box-shadow:0 0 0 4px var(--psoft)}
   .field::placeholder{color:var(--faint); font-weight:600}
   .field.en{text-align:left}
+  @keyframes ccFade{from{opacity:0}to{opacity:1}}
+  @keyframes ccUp{from{transform:translateY(101%)}to{transform:translateY(0)}}
   .underwrong{ text-decoration: underline wavy var(--bad); text-decoration-thickness:2px; text-underline-offset:4px }
   .num{ font-weight:900; font-feature-settings:'tnum' 1; letter-spacing:.5px; font-variant-numeric:tabular-nums }
   .card3d{ border:2.5px solid var(--line); box-shadow:0 6px 0 var(--edge), 0 16px 26px -16px rgba(45,50,115,.34) }
@@ -176,6 +178,7 @@ const T_LIGHT = {
   bg:'#eef1ff', ink:'#20254f', mut:'#5b6090', faint:'#7e84bd',
   line:'#dde2ff', card:'#ffffff', edge:'#c9d0f5',
   Y:'#ffd43b', Yd:'#e6b800', CO:'#ff8787', COd:'#e86b6b',
+  Ysoft:'#fff5d6', Yink:'#8a6a00',
   good:'#1faf6a', goodD:'#178a54', goodSoft:'#ddf5ea',
   bad:'#ef5b6b', badSoft:'#ffe5e8',
   sh:'0 14px 26px -16px rgba(45,50,115,.34)',
@@ -191,6 +194,7 @@ const T_DARK = {
   bg:'#0e1220', ink:'#e8ecf4', mut:'#9aa3b5', faint:'#727c93',
   line:'#2a3140', card:'#1a1f29', edge:'#2a3140',
   Y:'#ffd43b', Yd:'#e0bb2e', CO:'#ff9a9a', COd:'#e07878',
+  Ysoft:'#3a3320', Yink:'#ffd43b',
   good:'#3fce8a', goodD:'#2faf73', goodSoft:'#16302a',
   bad:'#ff6b7b', badSoft:'#33212a',
   sh:'0 14px 26px -16px rgba(0,0,0,.6)',
@@ -300,6 +304,89 @@ function capAddListener(plugin, eventName, cb){
    If boot() ever throws before it gets there, hide it anyway after a short delay so
    the app can never get permanently stuck on the launch screen. */
 try{ if(typeof window!=='undefined'){ window.addEventListener('load', ()=>{ try{ if(isNativeApp()) setTimeout(()=>{ capInvoke('SplashScreen','hide',{}).catch(()=>{}); }, 3000); }catch(_){} }); } }catch(_){}
+
+/* ===================== IAP (Apple In-App Purchase via RevenueCat) =====================
+   Native-only paywall. Web build stays free (no Stripe wired up).
+   * iOS calls the @revenuecat/purchases-capacitor plugin via capInvoke (no JS SDK
+     import — we have no bundler). The plugin auto-registers on the Swift side
+     when the package is installed via `npm install` + `npx cap sync`.
+   * Server entitlement (TB.isEntitled → is_entitled RPC, migration 0020) is the
+     truth source. Purchases SDK is the purchase machinery only.
+   * Optimistically flips app.state.entitled after a successful purchase/restore,
+     then reconciles from the server (RevenueCat webhook → subscriptions table). */
+const IAP = (function(){
+  const cfg = (typeof window!=='undefined' && window.__TALAQA_CONFIG__) || {};
+  let _configured=false, _configuring=null, _offeringsCache=null, _offeringsAt=0;
+  function publicKey(){ return cfg.revenueCatPublicKey || ''; }
+  function entitlementId(){ return cfg.entitlementId || 'talaqh_pro'; }
+  function available(){ return isNativeApp() && !!publicKey(); }
+  async function configure(uid){
+    if(!available()) return false;
+    if(_configured) return true;
+    if(_configuring) return _configuring;
+    _configuring = (async ()=>{
+      try{
+        await capInvoke('Purchases','configure',{ apiKey: publicKey(), appUserID: uid||undefined });
+        if(uid){ try{ await capInvoke('Purchases','logIn',{ appUserID: uid }); }catch(_){} }
+        _configured = true;
+        return true;
+      }catch(_){ return false; }
+      finally{ _configuring = null; }
+    })();
+    return _configuring;
+  }
+  async function logIn(uid){
+    if(!available() || !uid) return null;
+    try{ return await capInvoke('Purchases','logIn',{ appUserID: uid }); }catch(_){ return null; }
+  }
+  async function getOfferings(force){
+    if(!available()) return null;
+    const now=Date.now();
+    if(!force && _offeringsCache && (now-_offeringsAt)<60000) return _offeringsCache;
+    try{
+      const res = await capInvoke('Purchases','getOfferings',{});
+      _offeringsCache = (res && (res.current || (res.all && Object.values(res.all)[0]))) || null;
+      _offeringsAt = now;
+      return _offeringsCache;
+    }catch(_){ return null; }
+  }
+  async function purchasePackage(pkg){
+    if(!available() || !pkg) throw new Error('iap-unavailable');
+    return await capInvoke('Purchases','purchasePackage',{ aPackage: pkg });
+  }
+  async function restorePurchases(){
+    if(!available()) return null;
+    try{ return await capInvoke('Purchases','restorePurchases',{}); }catch(_){ return null; }
+  }
+  /* Refresh app.state.entitled from the SERVER (is_entitled RPC). Optimistic
+     callers can pre-flip entitled=true after a successful purchase; this then
+     reconciles with the webhook-updated subscriptions row within a few seconds. */
+  async function refreshEntitlementFromServer(){
+    try{
+      const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+      if(!TB || !TB.enabled || typeof TB.isEntitled!=='function') return;
+      const ent = await TB.isEntitled();
+      if(app.state.entitled !== !!ent) app.set({ entitled: !!ent });
+    }catch(_){}
+  }
+  /* Maps a RevenueCat package identifier ('$rc_weekly' / '$rc_monthly' / '$rc_annual')
+     to our PLANS key ('weekly' / 'monthly' / 'yearly'). RevenueCat uses standard
+     identifiers when the offering is created via the dashboard wizard. */
+  function planKeyFor(pkg){
+    if(!pkg) return null;
+    const id = String(pkg.identifier||'').toLowerCase();
+    if(id.includes('week')) return 'weekly';
+    if(id.includes('annual') || id.includes('year')) return 'yearly';
+    if(id.includes('month')) return 'monthly';
+    const prod = String((pkg.product && (pkg.product.identifier||pkg.product.id))||'').toLowerCase();
+    if(prod.includes('week')) return 'weekly';
+    if(prod.includes('year')) return 'yearly';
+    if(prod.includes('month')) return 'monthly';
+    return null;
+  }
+  return { available, configure, logIn, getOfferings, purchasePackage, restorePurchases, refreshEntitlementFromServer, planKeyFor, entitlementId };
+})();
+try{ if(typeof window!=='undefined') window.IAP = IAP; }catch(_){}
 function freshState(){
   return {
     screen:'splash', params:{}, stack:[],
@@ -312,6 +399,7 @@ function freshState(){
     darkMode:false,
     weekXp:0, weekKey:'',
     subscribed:false, plan:null,
+    entitled:false,                     // server-authoritative paid access (migration 0020 is_entitled)
     premium_until:null, pendingRef:'', referralStats:null,
     xp:0, xpToday:0, xpDay:'', dailyGoal:50, goalMetDay:'',
     streak:0, lastActiveDay:'', streakFreezes:1, freezeUsedDay:'', longestStreak:0, repairFrom:0,
@@ -332,7 +420,7 @@ function freshState(){
   };
 }
 
-const persistedKeys = ['authed','user','level','isBeginner','selfLevel','placeState','didFoundations','seenTour','darkMode','weekXp','weekKey','subscribed','plan','premium_until','pendingRef','xp','xpToday','xpDay','dailyGoal','goalMetDay','streak','lastActiveDay','streakFreezes','freezeUsedDay','longestStreak','repairFrom','wordsLearned','learnedWords','weakWords',
+const persistedKeys = ['authed','user','level','isBeginner','selfLevel','placeState','didFoundations','seenTour','darkMode','weekXp','weekKey','subscribed','plan','entitled','premium_until','pendingRef','xp','xpToday','xpDay','dailyGoal','goalMetDay','streak','lastActiveDay','streakFreezes','freezeUsedDay','longestStreak','repairFrom','wordsLearned','learnedWords','weakWords',
                        'hitMilestones','unlockedAchv',
                        'sections','words','fullQuizDone','unitDone','doneChapters','currentChapter','savedPosition','settings'];
 
@@ -608,6 +696,7 @@ const ICONS = {
   arrowR:(sw)=>`<path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
   chevL:(sw)=>`<path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
   chevR:(sw)=>`<path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
+  chevD:(sw)=>`<path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"/>`,
   refresh:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 16"/><path d="M4 20v-4h4"/></g>`,
   plane:(sw)=>`<path d="M10.5 13.5L3 11l2-2 6 1 4-5a2 2 0 0 1 3 3l-5 4 1 6-2 2-2.5-7.5L7 17v-2.5z" fill="currentColor"/>`,
   brief:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="11" rx="2.5"/><path d="M9 8V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 13h18"/></g>`,
@@ -619,6 +708,7 @@ const ICONS = {
   download:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10M8 10l4 4 4-4M5 19h14"/></g>`,
   logout:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-2"/><path d="M10 12h10M17 9l3 3-3 3"/></g>`,
   edit:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19h14M7 15l9-9 2 2-9 9-3 1z"/></g>`,
+  eye:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></g>`,
   abc:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16l2.5-7L8 16M3.8 14h3.4M11 16V8h2.2a2 2 0 1 1 0 4H11m0 0h2.4a2 2 0 1 1 0 4H11M21 10a2 2 0 0 0-4 0v4a2 2 0 0 0 4 0"/></g>`,
   cards:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="13" height="13" rx="2.5"/><path d="M8 7V5.5A1.5 1.5 0 0 1 9.5 4H19a1.5 1.5 0 0 1 1.5 1.5V15a1.5 1.5 0 0 1-1.5 1.5H16"/></g>`,
   quiz:(sw)=>`<g fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 8.5l1.3 1.3 2.2-2.4M8.5 15l1.3 1.3 2.2-2.4M14.5 8.5h2M14.5 15h2"/></g>`,
@@ -710,6 +800,10 @@ function statusBar(color){
   // keeps breathing room in a normal browser tab where the inset is 0.
   return h('div',{ style:{ height:'max(env(safe-area-inset-top), 8px)', flexShrink:0 }});
 }
+// Surrogate-pair-safe first character for avatar initials. Plain `s[0]` on
+// emoji or other non-BMP starting chars returns half a surrogate pair and
+// renders the replacement glyph in the avatar bubble.
+function initialOf(name, fallback){ return (Array.from(String(name||'').trim())[0]) || (fallback||'؟'); }
 function avatar(opts){
   const size=opts.size||40;
   const base={ width:size+'px', height:size+'px', borderRadius:'50%', flexShrink:0, boxShadow:opts.ring||'none', overflow:'hidden' };
@@ -1110,6 +1204,72 @@ const SCREENS = {};
 function _curr(){ return (typeof window!=='undefined') && window.CURRICULUM; }
 function _backend(){ return (typeof window!=='undefined') && window.TalaqaBackend; }
 function _shuffle(arr){ const a=arr.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); const t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
+/* Damerau-Levenshtein edit distance (counts an adjacent-letter swap as ONE edit,
+   so common typos like "recieve" read as close). Used for confusing distractors
+   and the spelling "قريب" near-match. */
+function _editDist(a,b){
+  a=String(a).toLowerCase(); b=String(b).toLowerCase();
+  const m=a.length, n=b.length;
+  if(!m) return n; if(!n) return m;
+  const d=[]; for(let i=0;i<=m;i++){ d[i]=[i]; } for(let j=0;j<=n;j++){ d[0][j]=j; }
+  for(let i=1;i<=m;i++){
+    for(let j=1;j<=n;j++){
+      const cost=a[i-1]===b[j-1]?0:1;
+      d[i][j]=Math.min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost);
+      if(i>1 && j>1 && a[i-1]===b[j-2] && a[i-2]===b[j-1]) d[i][j]=Math.min(d[i][j], d[i-2][j-2]+1);
+    }
+  }
+  return d[m][n];
+}
+/* Global distractor pool built once from the WHOLE curriculum, so quiz options can
+   be CONFUSING NEW words the learner didn't just study (not the unit's own 5). */
+let _DPOOL=null;
+function distractPool(){
+  if(_DPOOL) return _DPOOL;
+  const C=_curr(); const words=(C&&Array.isArray(C.words))?C.words:[];
+  const seenAr={}, seenEn={}, ar=[], en=[];
+  words.forEach(w=>{ if(!w) return;
+    const a=(w.ar||'').trim(), e=(w.en||'').trim(), pos=w.pos||'', lvl=w.level||'';
+    if(a && !seenAr[a]){ seenAr[a]=1; ar.push({ ar:a, pos, lvl }); }
+    if(e && !seenEn[e.toLowerCase()]){ seenEn[e.toLowerCase()]=1; en.push({ en:e, pos, lvl }); }
+  });
+  _DPOOL={ ar, en };
+  return _DPOOL;
+}
+/* n CONFUSING Arabic-meaning distractors from the whole curriculum, excluding the
+   answer + the unit's own meanings. Prefers same part-of-speech (and level) so the
+   options are plausible — the learner can't pick by "which one I just saw". */
+function distractAr(answerAr, excludeAr, n, pos, level){
+  const pool=distractPool().ar; if(!pool.length) return [];
+  const excl={}; (excludeAr||[]).forEach(a=>{ if(a) excl[String(a).trim()]=1; }); excl[String(answerAr).trim()]=1;
+  const cands=pool.filter(w=>!excl[w.ar]);
+  const t1=cands.filter(w=>pos&&w.pos===pos&&level&&w.lvl===level);  // same category + level
+  const t2=cands.filter(w=>pos&&w.pos===pos);                        // same category
+  const t3=cands;                                                    // anything else
+  const ordered=_shuffle(t1).concat(_shuffle(t2)).concat(_shuffle(t3));
+  const out=[], seen={};
+  for(const w of ordered){ if(out.length>=n) break; if(seen[w.ar]) continue; seen[w.ar]=1; out.push(w.ar); }
+  return out;
+}
+/* n CONFUSING English distractors — real curriculum words that LOOK like the answer
+   (similar spelling/length/first-letter) so the choice isn't obvious. */
+function distractEn(answerEn, excludeEn, n){
+  const pool=distractPool().en; if(!pool.length) return [];
+  const ans=String(answerEn||'').toLowerCase();
+  const excl={}; (excludeEn||[]).forEach(e=>{ if(e) excl[String(e).toLowerCase()]=1; }); excl[ans]=1;
+  const cands=pool.filter(w=>!excl[w.en.toLowerCase()]);
+  const scored=cands.map(w=>{ const e=w.en.toLowerCase();
+    let d=_editDist(ans,e);
+    if(e[0]===ans[0]) d-=0.6;                       // same starting letter -> looks alike
+    d+=Math.abs(e.length-ans.length)*0.3;           // similar length -> looks alike
+    return { en:w.en, d };
+  }).sort((a,b)=>a.d-b.d);
+  const top=scored.slice(0, Math.max(n*4, 12));     // a confusing top slice...
+  const out=[], seen={};
+  for(const w of _shuffle(top)){ if(out.length>=n) break; const k=w.en.toLowerCase(); if(seen[k]) continue; seen[k]=1; out.push(w.en); }
+  if(out.length<n){ for(const w of scored){ if(out.length>=n) break; const k=w.en.toLowerCase(); if(seen[k]) continue; seen[k]=1; out.push(w.en); } }
+  return out;
+}
 /* group a level's word rows into ordered chapters (preserving first-seen order) */
 function chaptersFor(level){
   const C=_curr(); if(!C || !Array.isArray(C.words)) return [];
@@ -1126,13 +1286,19 @@ function chaptersFor(level){
 /* map 5 raw curriculum rows -> the app's word shape */
 function mapWords(rawRows){
   const rows=rawRows.slice(0,5);
-  const allAr=rows.map(r=>r.ar);
+  const unitAr=rows.map(r=>r.ar);   // never offer the unit's own 5 meanings as distractors
   return rows.map((r,i)=>{
     const thisAr=r.ar;
-    const distractors=_shuffle(allAr.filter((_,j)=>j!==i)).slice(0,3);
+    // CONFUSING distractors: NEW words from the whole curriculum (same part-of-speech
+    // / level so they're plausible), not the other words the learner just studied.
+    let distractors=distractAr(thisAr, unitAr, 3, r.pos, r.level);
+    if(distractors.length<3){   // tiny/absent curriculum (demo, harness) -> old behavior
+      const seen={}; distractors.forEach(d=>seen[d]=1);
+      _shuffle(unitAr).forEach(a=>{ if(distractors.length<3 && a!==thisAr && !seen[a]){ seen[a]=1; distractors.push(a); } });
+    }
     const choices=_shuffle([thisAr].concat(distractors));
     return {
-      en:r.en, ar:r.ar, ipa:'', translit:r.phonetic||'',
+      en:r.en, ar:r.ar, ipa:'', translit:r.phonetic||'', pos:r.pos||'', level:r.level||'',
       // Prefer the PRE-GENERATED examples file (instant, 3 per word); fall back to
       // the curriculum's single example, then to async generation.
       examples: (typeof window!=='undefined' && window.WORD_EXAMPLES && window.WORD_EXAMPLES[(r.en||'').toLowerCase()])
@@ -1154,8 +1320,16 @@ function phonetic(w){
 function buildFullQuiz(words){
   const ws=(words||[]).slice(0,5);
   if(ws.length<2) return FULL_QUIZ;                 // not enough words -> keep demo
-  const ens=ws.map(w=>w.en);
-  const pickEnChoices=(i)=>{ const distract=_shuffle(ens.filter((_,j)=>j!==i)).slice(0,3); const ch=_shuffle([ws[i].en].concat(distract)); return { choices:ch, answer:ch.indexOf(ws[i].en) }; };
+  const unitEn=ws.map(w=>w.en);                     // the unit's own words -> never distractors
+  const unitAr=ws.map(w=>w.ar);
+  // CONFUSING English options: real curriculum words that LOOK like the answer,
+  // never the other 4 words the learner just studied.
+  const pickEnChoices=(i)=>{
+    let distract=distractEn(ws[i].en, unitEn, 3);
+    if(distract.length<3){ const seen={}; distract.forEach(d=>seen[d.toLowerCase()]=1);
+      _shuffle(unitEn).forEach(e=>{ if(distract.length<3 && e!==ws[i].en && !seen[e.toLowerCase()]){ seen[e.toLowerCase()]=1; distract.push(e); } }); }
+    const ch=_shuffle([ws[i].en].concat(distract)); return { choices:ch, answer:ch.indexOf(ws[i].en) };
+  };
   // assign a question TYPE to each of the 5 words (cycled so the mix is stable)
   const types=['meaning','reverse','spell','listen','meaning'];
   return ws.map((w,i)=>{
@@ -1163,10 +1337,13 @@ function buildFullQuiz(words){
     if(t==='spell') return { type:'spell', prompt:'اكتب الكلمة الإنجليزية اللي معناها:', word:w.ar, answer:String(w.en||'').toLowerCase() };
     if(t==='listen'){ const c=pickEnChoices(i); return { type:'listen', prompt:'اسمع، بعدين اختر الكلمة اللي سمعتها.', word:w.en, choices:c.choices, answer:c.answer }; }
     if(t==='reverse'){ const c=pickEnChoices(i); return { type:'reverse', prompt:'اختر الكلمة الإنجليزية الصح لـ:', word:w.ar, choices:c.choices, answer:c.answer }; }
-    // meaning: Arabic answer choices (reuse the word's meaningChoices if present)
+    // meaning: Arabic answer choices (reuse the word's confusing meaningChoices if present)
     if(Array.isArray(w.meaningChoices) && w.meaningChoices.length>=2 && typeof w.meaningAnswer==='number')
       return { type:'meaning', prompt:'وش معنى الكلمة؟', word:w.en, choices:w.meaningChoices, answer:w.meaningAnswer };
-    const ars=ws.map(x=>x.ar); const distract=_shuffle(ars.filter((_,j)=>j!==i)).slice(0,3); const ch=_shuffle([w.ar].concat(distract));
+    let distract=distractAr(w.ar, unitAr, 3, w.pos, w.level);
+    if(distract.length<3){ const seen={}; distract.forEach(d=>seen[d]=1);
+      _shuffle(unitAr).forEach(a=>{ if(distract.length<3 && a!==w.ar && !seen[a]){ seen[a]=1; distract.push(a); } }); }
+    const ch=_shuffle([w.ar].concat(distract));
     return { type:'meaning', prompt:'وش معنى الكلمة؟', word:w.en, choices:ch, answer:ch.indexOf(w.ar) };
   });
 }
@@ -1735,6 +1912,139 @@ SCREENS.splash = ()=> h('div',{class:'scr', style:{ background:'radial-gradient(
 );
 
 /* ===================== AUTH ===================== */
+/* All country dialing codes. Arab/Gulf countries are listed first (the app's
+   primary audience), then every other country sorted by Arabic name. Flags are
+   derived from the ISO code at runtime so we never hand-type emoji. */
+const COUNTRIES = [
+  {i:'SA',d:'+966',n:'السعودية'},{i:'AE',d:'+971',n:'الإمارات'},{i:'KW',d:'+965',n:'الكويت'},
+  {i:'QA',d:'+974',n:'قطر'},{i:'BH',d:'+973',n:'البحرين'},{i:'OM',d:'+968',n:'عُمان'},
+  {i:'EG',d:'+20',n:'مصر'},{i:'JO',d:'+962',n:'الأردن'},{i:'IQ',d:'+964',n:'العراق'},
+  {i:'SY',d:'+963',n:'سوريا'},{i:'LB',d:'+961',n:'لبنان'},{i:'PS',d:'+970',n:'فلسطين'},
+  {i:'YE',d:'+967',n:'اليمن'},{i:'SD',d:'+249',n:'السودان'},{i:'LY',d:'+218',n:'ليبيا'},
+  {i:'TN',d:'+216',n:'تونس'},{i:'DZ',d:'+213',n:'الجزائر'},{i:'MA',d:'+212',n:'المغرب'},
+  {i:'MR',d:'+222',n:'موريتانيا'},{i:'SO',d:'+252',n:'الصومال'},{i:'DJ',d:'+253',n:'جيبوتي'},
+  {i:'KM',d:'+269',n:'جزر القمر'},
+  {i:'AF',d:'+93',n:'أفغانستان'},{i:'AL',d:'+355',n:'ألبانيا'},{i:'AD',d:'+376',n:'أندورا'},
+  {i:'AO',d:'+244',n:'أنغولا'},{i:'AG',d:'+1268',n:'أنتيغوا وباربودا'},{i:'AR',d:'+54',n:'الأرجنتين'},
+  {i:'AM',d:'+374',n:'أرمينيا'},{i:'AU',d:'+61',n:'أستراليا'},{i:'AT',d:'+43',n:'النمسا'},
+  {i:'AZ',d:'+994',n:'أذربيجان'},{i:'BS',d:'+1242',n:'الباهاما'},{i:'BD',d:'+880',n:'بنغلاديش'},
+  {i:'BB',d:'+1246',n:'باربادوس'},{i:'BY',d:'+375',n:'بيلاروسيا'},{i:'BE',d:'+32',n:'بلجيكا'},
+  {i:'BZ',d:'+501',n:'بليز'},{i:'BJ',d:'+229',n:'بنين'},{i:'BT',d:'+975',n:'بوتان'},
+  {i:'BO',d:'+591',n:'بوليفيا'},{i:'BA',d:'+387',n:'البوسنة والهرسك'},{i:'BW',d:'+267',n:'بوتسوانا'},
+  {i:'BR',d:'+55',n:'البرازيل'},{i:'BN',d:'+673',n:'بروناي'},{i:'BG',d:'+359',n:'بلغاريا'},
+  {i:'BF',d:'+226',n:'بوركينا فاسو'},{i:'BI',d:'+257',n:'بوروندي'},{i:'CV',d:'+238',n:'الرأس الأخضر'},
+  {i:'KH',d:'+855',n:'كمبوديا'},{i:'CM',d:'+237',n:'الكاميرون'},{i:'CA',d:'+1',n:'كندا'},
+  {i:'CF',d:'+236',n:'أفريقيا الوسطى'},{i:'TD',d:'+235',n:'تشاد'},{i:'CL',d:'+56',n:'تشيلي'},
+  {i:'CN',d:'+86',n:'الصين'},{i:'CO',d:'+57',n:'كولومبيا'},{i:'CG',d:'+242',n:'الكونغو'},
+  {i:'CD',d:'+243',n:'الكونغو الديمقراطية'},{i:'CR',d:'+506',n:'كوستاريكا'},{i:'CI',d:'+225',n:'ساحل العاج'},
+  {i:'HR',d:'+385',n:'كرواتيا'},{i:'CU',d:'+53',n:'كوبا'},{i:'CY',d:'+357',n:'قبرص'},
+  {i:'CZ',d:'+420',n:'التشيك'},{i:'DK',d:'+45',n:'الدنمارك'},{i:'DM',d:'+1767',n:'دومينيكا'},
+  {i:'DO',d:'+1809',n:'الدومينيكان'},{i:'EC',d:'+593',n:'الإكوادور'},{i:'SV',d:'+503',n:'السلفادور'},
+  {i:'GQ',d:'+240',n:'غينيا الاستوائية'},{i:'ER',d:'+291',n:'إريتريا'},{i:'EE',d:'+372',n:'إستونيا'},
+  {i:'SZ',d:'+268',n:'إسواتيني'},{i:'ET',d:'+251',n:'إثيوبيا'},{i:'FJ',d:'+679',n:'فيجي'},
+  {i:'FI',d:'+358',n:'فنلندا'},{i:'FR',d:'+33',n:'فرنسا'},{i:'GA',d:'+241',n:'الغابون'},
+  {i:'GM',d:'+220',n:'غامبيا'},{i:'GE',d:'+995',n:'جورجيا'},{i:'DE',d:'+49',n:'ألمانيا'},
+  {i:'GH',d:'+233',n:'غانا'},{i:'GR',d:'+30',n:'اليونان'},{i:'GD',d:'+1473',n:'غرينادا'},
+  {i:'GT',d:'+502',n:'غواتيمالا'},{i:'GN',d:'+224',n:'غينيا'},{i:'GW',d:'+245',n:'غينيا بيساو'},
+  {i:'GY',d:'+592',n:'غيانا'},{i:'HT',d:'+509',n:'هايتي'},{i:'HN',d:'+504',n:'هندوراس'},
+  {i:'HU',d:'+36',n:'المجر'},{i:'IS',d:'+354',n:'آيسلندا'},{i:'IN',d:'+91',n:'الهند'},
+  {i:'ID',d:'+62',n:'إندونيسيا'},{i:'IR',d:'+98',n:'إيران'},{i:'IE',d:'+353',n:'أيرلندا'},
+  {i:'IT',d:'+39',n:'إيطاليا'},{i:'JM',d:'+1876',n:'جامايكا'},{i:'JP',d:'+81',n:'اليابان'},
+  {i:'KZ',d:'+7',n:'كازاخستان'},{i:'KE',d:'+254',n:'كينيا'},{i:'KI',d:'+686',n:'كيريباتي'},
+  {i:'KP',d:'+850',n:'كوريا الشمالية'},{i:'KR',d:'+82',n:'كوريا الجنوبية'},{i:'KG',d:'+996',n:'قيرغيزستان'},
+  {i:'LA',d:'+856',n:'لاوس'},{i:'LV',d:'+371',n:'لاتفيا'},{i:'LS',d:'+266',n:'ليسوتو'},
+  {i:'LR',d:'+231',n:'ليبيريا'},{i:'LI',d:'+423',n:'ليختنشتاين'},{i:'LT',d:'+370',n:'ليتوانيا'},
+  {i:'LU',d:'+352',n:'لوكسمبورغ'},{i:'MG',d:'+261',n:'مدغشقر'},{i:'MW',d:'+265',n:'مالاوي'},
+  {i:'MY',d:'+60',n:'ماليزيا'},{i:'MV',d:'+960',n:'المالديف'},{i:'ML',d:'+223',n:'مالي'},
+  {i:'MT',d:'+356',n:'مالطا'},{i:'MH',d:'+692',n:'جزر مارشال'},{i:'MU',d:'+230',n:'موريشيوس'},
+  {i:'MX',d:'+52',n:'المكسيك'},{i:'FM',d:'+691',n:'ميكرونيزيا'},{i:'MD',d:'+373',n:'مولدوفا'},
+  {i:'MC',d:'+377',n:'موناكو'},{i:'MN',d:'+976',n:'منغوليا'},{i:'ME',d:'+382',n:'الجبل الأسود'},
+  {i:'MZ',d:'+258',n:'موزمبيق'},{i:'MM',d:'+95',n:'ميانمار'},{i:'NA',d:'+264',n:'ناميبيا'},
+  {i:'NR',d:'+674',n:'ناورو'},{i:'NP',d:'+977',n:'نيبال'},{i:'NL',d:'+31',n:'هولندا'},
+  {i:'NZ',d:'+64',n:'نيوزيلندا'},{i:'NI',d:'+505',n:'نيكاراغوا'},{i:'NE',d:'+227',n:'النيجر'},
+  {i:'NG',d:'+234',n:'نيجيريا'},{i:'MK',d:'+389',n:'مقدونيا الشمالية'},{i:'NO',d:'+47',n:'النرويج'},
+  {i:'PK',d:'+92',n:'باكستان'},{i:'PW',d:'+680',n:'بالاو'},{i:'PA',d:'+507',n:'بنما'},
+  {i:'PG',d:'+675',n:'بابوا غينيا الجديدة'},{i:'PY',d:'+595',n:'باراغواي'},{i:'PE',d:'+51',n:'بيرو'},
+  {i:'PH',d:'+63',n:'الفلبين'},{i:'PL',d:'+48',n:'بولندا'},{i:'PT',d:'+351',n:'البرتغال'},
+  {i:'RO',d:'+40',n:'رومانيا'},{i:'RU',d:'+7',n:'روسيا'},{i:'RW',d:'+250',n:'رواندا'},
+  {i:'KN',d:'+1869',n:'سانت كيتس ونيفيس'},{i:'LC',d:'+1758',n:'سانت لوسيا'},{i:'VC',d:'+1784',n:'سانت فنسنت'},
+  {i:'WS',d:'+685',n:'ساموا'},{i:'SM',d:'+378',n:'سان مارينو'},{i:'ST',d:'+239',n:'ساو تومي وبرينسيب'},
+  {i:'SN',d:'+221',n:'السنغال'},{i:'RS',d:'+381',n:'صربيا'},{i:'SC',d:'+248',n:'سيشل'},
+  {i:'SL',d:'+232',n:'سيراليون'},{i:'SG',d:'+65',n:'سنغافورة'},{i:'SK',d:'+421',n:'سلوفاكيا'},
+  {i:'SI',d:'+386',n:'سلوفينيا'},{i:'SB',d:'+677',n:'جزر سليمان'},{i:'ZA',d:'+27',n:'جنوب أفريقيا'},
+  {i:'SS',d:'+211',n:'جنوب السودان'},{i:'ES',d:'+34',n:'إسبانيا'},{i:'LK',d:'+94',n:'سريلانكا'},
+  {i:'SR',d:'+597',n:'سورينام'},{i:'SE',d:'+46',n:'السويد'},{i:'CH',d:'+41',n:'سويسرا'},
+  {i:'TW',d:'+886',n:'تايوان'},{i:'TJ',d:'+992',n:'طاجيكستان'},{i:'TZ',d:'+255',n:'تنزانيا'},
+  {i:'TH',d:'+66',n:'تايلاند'},{i:'TL',d:'+670',n:'تيمور الشرقية'},{i:'TG',d:'+228',n:'توغو'},
+  {i:'TO',d:'+676',n:'تونغا'},{i:'TT',d:'+1868',n:'ترينيداد وتوباغو'},{i:'TR',d:'+90',n:'تركيا'},
+  {i:'TM',d:'+993',n:'تركمانستان'},{i:'TV',d:'+688',n:'توفالو'},{i:'UG',d:'+256',n:'أوغندا'},
+  {i:'UA',d:'+380',n:'أوكرانيا'},{i:'GB',d:'+44',n:'المملكة المتحدة'},{i:'US',d:'+1',n:'الولايات المتحدة'},
+  {i:'UY',d:'+598',n:'أوروغواي'},{i:'UZ',d:'+998',n:'أوزبكستان'},{i:'VU',d:'+678',n:'فانواتو'},
+  {i:'VE',d:'+58',n:'فنزويلا'},{i:'VN',d:'+84',n:'فيتنام'},{i:'ZM',d:'+260',n:'زامبيا'},
+  {i:'ZW',d:'+263',n:'زيمبابوي'},
+];
+const CC_ARAB_ISO = ['SA','AE','KW','QA','BH','OM','EG','JO','IQ','SY','LB','PS','YE','SD','LY','TN','DZ','MA','MR','SO','DJ','KM'];
+const CC_MAP = {}; COUNTRIES.forEach(c=>{ CC_MAP[c.i]=c; });
+const CC_ORDERED = CC_ARAB_ISO.map(i=>CC_MAP[i]).filter(Boolean)
+  .concat([{sep:true}])
+  .concat(COUNTRIES.filter(c=>CC_ARAB_ISO.indexOf(c.i)===-1).sort((a,b)=>a.n.localeCompare(b.n,'ar')));
+/* ISO 3166 alpha-2 -> flag emoji (regional indicator pair). */
+function flagOf(iso){ return String(iso||'').toUpperCase().replace(/[A-Z]/g, ch=>String.fromCodePoint(127397+ch.charCodeAt(0))); }
+/* Crisp flag IMAGE from flagcdn (Windows ships no flag-emoji font, so emoji
+   render as bare letters there). Falls back to the emoji flag if the image fails
+   to load (offline / CDN down). It's cross-origin, so the service worker passes
+   it straight to the network (uncached) — see sw.js. */
+function flagImg(iso, sz){
+  const w=(sz&&sz.w)||28, ht=(sz&&sz.h)||20, code=String(iso||'').toLowerCase();
+  return h('img',{ src:`https://flagcdn.com/w80/${code}.png`, alt:'', loading:'lazy', decoding:'async',
+    style:{ width:w+'px', height:ht+'px', objectFit:'cover', borderRadius:'4px', flexShrink:0, boxShadow:'0 0 0 1px rgba(0,0,0,.10)', display:'block' },
+    onError:(e)=>{ try{ const t=e.target; if(t._fb) return; t._fb=1; t.replaceWith(h('span',{ style:{ fontSize:(ht-1)+'px', lineHeight:1, flexShrink:0 } }, flagOf(iso))); }catch(_){ } } });
+}
+/* On-brand country picker — a bottom sheet that slides up over the login screen
+   (opened via s.ui.ccOpen). Replaces the OS <select> dropdown: searchable, with
+   flag / Arabic name / dial-code rows, the current pick highlighted in emerald. */
+function countrySheet(s){
+  const sel = s.ui.ccISO || 'SA';
+  const q = String(s.ui.ccSearch||'').trim().toLowerCase();
+  const close = ()=>app.setUI({ ccOpen:false });
+  const pick = iso => { const o=CC_MAP[iso]; if(o) app.setUI({ ccISO:o.i, cc:o.d, ccOpen:false, ccSearch:'' }); };
+  const row = c => h('button',{ class:'press', type:'button', onClick:()=>pick(c.i),
+    style:{ width:'100%', display:'flex', alignItems:'center', gap:'12px', textAlign:'start',
+      background: c.i===sel ? T.Psoft : 'transparent', border:'none', borderRadius:'14px', padding:'12px 14px', cursor:'pointer' } },
+    flagImg(c.i, {w:30, h:21}),
+    h('span',{ style:{ flex:1, fontWeight:800, fontSize:'15px', color: c.i===sel ? T.PD : T.ink } }, c.n),
+    h('span',{ class:'en', style:{ fontWeight:800, fontSize:'14px', color:T.mut, direction:'ltr' } }, c.d),
+    c.i===sel ? ico('check',{ size:18, sw:3, color:T.P }) : null);
+  const label = t => h('div',{ style:{ fontSize:'12px', fontWeight:900, color:T.faint, padding:'12px 14px 4px' } }, t);
+  let listKids;
+  if(q){
+    const norm = v => String(v).toLowerCase();
+    const found = CC_ORDERED.filter(c=>!c.sep && (norm(c.n).includes(q) || norm(c.d).includes(q) || norm(c.i).includes(q)));
+    listKids = found.length ? found.map(row)
+      : [ h('div',{style:{ textAlign:'center', color:T.mut, fontWeight:700, padding:'28px 14px' }}, 'ما فيه نتيجة 🤷') ];
+  } else {
+    const arab = CC_ARAB_ISO.map(i=>CC_MAP[i]).filter(Boolean);
+    const rest = CC_ORDERED.filter(c=>!c.sep && CC_ARAB_ISO.indexOf(c.i)===-1);
+    listKids = [ label('الدول العربية'), ...arab.map(row), label('كل الدول'), ...rest.map(row) ];
+  }
+  return h('div',{ style:{ position:'absolute', inset:0, zIndex:60, display:'flex', flexDirection:'column', justifyContent:'flex-end' } },
+    h('div',{ onClick:close, style:{ position:'absolute', inset:0, background:'rgba(18,18,45,.45)', animation:'ccFade .2s ease both' } }),
+    h('div',{ style:{ position:'relative', background:T.card, borderTopLeftRadius:'26px', borderTopRightRadius:'26px',
+        maxHeight:'82%', display:'flex', flexDirection:'column', overflow:'hidden',
+        boxShadow:'0 -12px 40px -10px rgba(20,20,55,.45)', animation:'ccUp .28s cubic-bezier(.22,1,.36,1) both',
+        paddingBottom:'calc(8px + env(safe-area-inset-bottom))' } },
+      h('div',{ style:{ width:'42px', height:'5px', borderRadius:'99px', background:T.line, margin:'10px auto 2px', flexShrink:0 } }),
+      h('div',{ style:{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'4px 16px 8px', flexShrink:0 } },
+        h('div',{ style:{ fontSize:'18px', fontWeight:900, color:T.ink } }, 'اختر الدولة'),
+        h('button',{ class:'press', type:'button', 'aria-label':'إغلاق', onClick:close,
+          style:{ width:'34px', height:'34px', borderRadius:'50%', background:T.bg, display:'flex', alignItems:'center', justifyContent:'center', border:'none', cursor:'pointer' } }, ico('x',{ size:17, sw:2.6, color:T.mut }))),
+      h('div',{ style:{ padding:'0 16px 10px', flexShrink:0 } },
+        h('input',{ id:'cc_search', class:'field', dir:'rtl', placeholder:'ابحث عن دولة أو رمز…', value:s.ui.ccSearch||'',
+          autocapitalize:'none', autocorrect:'off', spellcheck:'false',
+          onInput:(e)=>app.setUI({ ccSearch:e.target.value }),
+          style:{ fontSize:'15px', padding:'12px 14px' } })),
+      h('div',{ class:'scroll', style:{ flex:1, minHeight:0, padding:'0 10px 6px', display:'flex', flexDirection:'column' } }, ...listKids)));
+}
 SCREENS.auth = (s)=>{
   const codeStep = s.ui.authStep==='code';
   const busy = !!s.ui.authBusy;
@@ -1751,7 +2061,10 @@ SCREENS.auth = (s)=>{
     // When re-sending from the code step we already have authPhone; otherwise read the field.
     const phone = (codeStep && s.ui.authPhone) ? s.ui.authPhone : e164();
     const digits = phone.replace(/[^0-9]/g,'').slice((s.ui.cc||'+966').replace(/[^0-9]/g,'').length);
-    if(!/^5\d{8}$/.test(digits)){ toast('أدخل رقم جوال سعودي صحيح — يبدأ بـ ٥ و٩ أرقام'); return; }
+    // E.164 subscriber-number length check (min 6, max 14). Per-country format
+    // validation lives at Supabase / Twilio. Previously hardcoded /^5\d{8}$/
+    // which rejected every non-Saudi number selected from the country picker.
+    if(digits.length<6 || digits.length>14){ toast('أدخل رقم جوال صحيح'); return; }
     if(!(TB && TB.enabled && TB.sendPhoneOtp)){
       // offline / demo: skip straight to the code step (any code works there)
       app.setUI({ authStep:'code', authPhone:phone, otpCode:'' });
@@ -1762,12 +2075,13 @@ SCREENS.auth = (s)=>{
     try{
       await TB.sendPhoneOtp(phone);
       app.setUI({ authStep:'code', authPhone:phone, authBusy:false, otpCode:'' });
-      toast('أرسلنا رمز التحقق إلى '+phone+' ✉️');
+      // U+2066 (LRI) / U+2069 (PDI) isolate the LTR phone number from the
+      // surrounding Arabic so leading "+" and digits don't get bidi-reordered.
+      toast('أرسلنا رمز التحقق إلى ⁦'+phone+'⁩ ✉️');
     }catch(err){
       app.setUI({ authBusy:false });
       try{ console.error('[otp-send]', err); }catch(_){}
-      const _dbg=(err&&(err.error_code||err.code||err.status||err.name))||((err&&err.message)||'').slice(0,48)||'?';
-      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نرسل الرمز')+' ·[S:'+_dbg+']');
+      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نرسل الرمز'));
     }
   };
 
@@ -1787,19 +2101,39 @@ SCREENS.auth = (s)=>{
     app.setUI({ authBusy:true });
     try{
       await TB.verifyPhoneOtp(phone, code);
-      let patch=null; try{ patch=await TB.loadProgress(); }catch(_){}
+      // CRITICAL: do NOT mark _restored or route as a new user on a transient
+      // loadProgress failure. The previous shape (try/catch swallowing the
+      // error, then app._restored=true and isNew=true) would route a returning
+      // user to onboarding and let the next autosave clobber their real cloud
+      // progress with an empty blob. Now: if loadProgress THROWS we surface
+      // a retry toast and let the user try again — same defense as the boot
+      // path. Only on a successful load do we mark _restored and route.
+      let patch;
+      try{ patch = await TB.loadProgress(); }
+      catch(loadErr){
+        app.setUI({ authBusy:false });
+        try{ console.error('[otp-verify:load]', loadErr); }catch(_){}
+        toast('تعذّر تحميل تقدمك، حاول مرة ثانية');
+        return;
+      }
       app._restored = true;
       app.set(Object.assign({ authed:true }, patch||{}, { user:Object.assign({}, app.state.user, (patch&&patch.user)||{}, { phone }) }));
-      const isNew = !(patch && patch.level);
+      // Server-authoritative isNew. Prefer profiles.onboarding_completed
+      // (set by complete_onboarding RPC); fall back to the legacy heuristic
+      // only if the server flag is absent (older profiles, offline path).
+      const isNew = (patch && typeof patch._serverOnboardingCompleted === 'boolean')
+        ? !patch._serverOnboardingCompleted
+        : !(patch && patch.level);
       // Referral: link a brand-new user to their inviter (best-effort), then consume the code.
+      // Server-side claim_referral has its own new-user gate (0020) so a stale
+      // client guess can no longer hijack the referrer's link.
       try{ const pend=app.state.pendingRef; if(isNew && pend && TB.claimReferral){ TB.claimReferral(pend); } if(pend) app.set({ pendingRef:'' }); }catch(_){}
       if(isNew){ go('taste',{},{resetStack:true}); }   // brand-new -> first-word wow -> onboarding (collects name)
       else { if(typeof restoreCurrentChapter==='function') restoreCurrentChapter(); go('home',{},{resetStack:true}); }
     }catch(err){
       app.setUI({ authBusy:false });
       try{ console.error('[otp-verify]', err); }catch(_){}
-      const _dbg=(err&&(err.error_code||err.code||err.status||err.name))||((err&&err.message)||'').slice(0,48)||'?';
-      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نتحقق')+' ·[V:'+_dbg+']');
+      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نتحقق'));
     }
   };
 
@@ -1811,11 +2145,21 @@ SCREENS.auth = (s)=>{
         ? h('span',null,'أرسلنا رمزًا إلى ', h('span',{class:'en', style:{ direction:'ltr', display:'inline-block', fontWeight:800, color:T.ink }}, s.ui.authPhone||''))
         : 'نتحقق منك عن طريق رمز بالجوال'));
 
-  // PHONE STEP body: country code (right, RTL) + phone number (fills)
+  // PHONE STEP body: the row is forced LTR so the country-code picker sits on the
+  // LEFT and the number fills the rest on its right (natural "+966 5XXXXXXXX" order).
+  // The picker opens a custom on-brand bottom sheet (countrySheet) instead of the
+  // OS <select> dropdown — searchable, with flag/name/dial-code rows.
+  const ccISO = s.ui.ccISO || 'SA';
+  const ccObj = CC_MAP[ccISO] || CC_MAP.SA;
+  const ccTrigger = h('button',{ class:'press', type:'button', 'aria-label':'رمز الدولة', onClick:()=>app.setUI({ ccOpen:true, ccSearch:'' }),
+    style:{ width:'118px', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', gap:'7px',
+      background:'#fff', border:`2px solid ${T.line}`, borderRadius:'16px', padding:'15px 8px', cursor:'pointer' } },
+    flagImg(ccObj.i, {w:26, h:18}),
+    h('span',{ class:'en', style:{ fontWeight:800, fontSize:'16px', color:T.ink } }, ccObj.d),
+    ico('chevD',{ size:15, sw:2.5, color:T.mut }));
   const phoneBody = h('div',{style:{ display:'flex', flexDirection:'column', gap:'12px','--i':1 }},
-    h('div',{style:{ display:'flex', gap:'8px' }},
-      h('input',{ id:'f_cc', class:'field en', value:s.ui.cc||'+966', readonly:true, dir:'ltr',
-        style:{ width:'82px', flexShrink:0, textAlign:'center', fontWeight:800 } }),
+    h('div',{style:{ display:'flex', gap:'8px', direction:'ltr' }},
+      ccTrigger,
       h('input',{ id:'f_phone', type:'tel', inputmode:'numeric', class:'field en', dir:'ltr', placeholder:'5XXXXXXXX',
         value:s.ui.phoneNum||'', onInput:(e)=>{ app.state.ui.phoneNum=String(e.target.value||'').replace(/[^0-9]/g,''); },
         style:{ flex:1, textAlign:'left' } })));
@@ -1838,7 +2182,8 @@ SCREENS.auth = (s)=>{
     footer(
       bigBtn(busy ? 'شوي...' : (codeStep?'دخول':'أرسل الرمز'), { onClick:(codeStep?verify:sendCode), icon:'arrowL', disabled:busy }),
       h('div',{style:{ textAlign:'center', color:T.faint, fontSize:'12px', fontWeight:700, marginTop:'12px' }},'بالمتابعة، أنت توافق على الشروط وسياسة الخصوصية')
-    )
+    ),
+    (!codeStep && s.ui.ccOpen) ? countrySheet(s) : null
   );
 };
 function fieldRow(icn, id, ph, type, en){
@@ -1894,7 +2239,7 @@ SCREENS.onboard_welcome = (s)=> frame(
   body({pad:'18px 24px 0'},
     h('div',{style:{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', textAlign:'center', gap:'10px' }},
       emojiBadge('👋', { size:106, bg:T.Ptint, edge:'#d7def7' }),
-      h('div',{style:{ fontSize:'26px', fontWeight:900 }}, `أهلاً ${s.user.name||''}!`),
+      h('div',{style:{ fontSize:'26px', fontWeight:900 }}, s.user.name ? `أهلاً ${s.user.name}!` : 'أهلاً بك!'),
       h('div',{style:{ fontSize:'15px', color:T.mut, fontWeight:600, lineHeight:1.7, maxWidth:'300px' }},
         'راح نسأل أسئلة سريعة عشان نُخصّص رحلتك بالإنجليزية حسب هدفك ومستواك.'))),
   footer(bigBtn('يلا نبدأ', { onClick:()=>go('onboard_name'), icon:'arrowL' }))
@@ -1907,7 +2252,13 @@ SCREENS.onboard_name = (s)=> frame(
   footer(bigBtn('كمّل', { icon:'arrowL', onClick:()=>{
     const v=(document.getElementById('ob_name')||{}).value;
     if(!v||!v.trim()){ toast('اكتب اسمك أول'); return; }
-    app.set({ user:Object.assign({}, s.user, { name:v.trim() }) }); go('onboard_age');
+    const nm=v.trim();
+    app.set({ user:Object.assign({}, s.user, { name:nm }) });
+    // Persist the name to the server immediately. Closes the abandonment
+    // window between this screen and finishSetup (where complete_onboarding
+    // would otherwise be the first write of profiles.display_name).
+    try{ const TB=(typeof window!=='undefined')&&window.TalaqaBackend; if(TB&&TB.saveDisplayName){ TB.saveDisplayName(nm); } }catch(_){}
+    go('onboard_age');
   }}))
 );
 SCREENS.onboard_age = (s)=>{
@@ -2259,13 +2610,36 @@ function startWords(){
 }
 function launchSection(id){
   markPosition('unit_hub',{});
-  // if a real chapter is loaded but its lesson wasn't regenerated yet (e.g. after reload), kick it off
-  if(typeof ensureCurrentLesson==='function') ensureCurrentLesson();
-  if(id==='words') startWords();
-  else if(id==='listening') go('listen_clip',{i:0});
-  else if(id==='reading') go('reading',{i:0});
-  else if(id==='conversation') go('convo_intro');
-  else if(id==='grammar') go('grammar_lesson');
+  // Free-tier daily-section gate (migration 0020). Native + IAP-enabled only —
+  // web stays unrestricted until/unless we wire a web billing path. Paid users
+  // get a server free-pass via is_entitled(). On a server glitch the RPC
+  // returns null and we let the user through (fail-open on the web; native has
+  // its own offline behavior).
+  const _open = ()=>{
+    if(typeof ensureCurrentLesson==='function') ensureCurrentLesson();
+    if(id==='words') startWords();
+    else if(id==='listening') go('listen_clip',{i:0});
+    else if(id==='reading') go('reading',{i:0});
+    else if(id==='conversation') go('convo_intro');
+    else if(id==='grammar') go('grammar_lesson');
+  };
+  try{
+    const _iapOn = (typeof IAP!=='undefined') && IAP.available && IAP.available();
+    const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+    if(!_iapOn || !TB || !TB.enabled || typeof TB.consumeDailySection!=='function' || !app.state.authed){
+      _open(); return;
+    }
+    // Already known-entitled in this session? Skip the round-trip.
+    if(app.state.entitled){ _open(); return; }
+    Promise.resolve(TB.consumeDailySection()).then(r=>{
+      if(!r){ _open(); return; }                          // transport blip: don't block
+      if(r.entitled){ if(!app.state.entitled) app.set({entitled:true}); _open(); return; }
+      if(r.allowed){ _open(); return; }
+      // Daily limit hit — route to paywall with the "tomorrow OR subscribe" UX.
+      app.setUI({ paywallReason:'daily_limit' });
+      go('paywall');
+    }).catch(()=>{ _open(); });
+  }catch(_){ _open(); }
 }
 /* today's calendar day as a stable string key. Pure Date logic — runs under Node too. */
 function dayStr(){ return new Date().toDateString(); }
@@ -2486,6 +2860,11 @@ function refreshLeaderboard(){
     if(!TB || !TB.enabled || typeof TB.getLeaderboard!=='function') return;
     // one-time: push an existing local photo to the server so it shows for others
     if(!app._avatarSynced && app.state.user && app.state.user.photo){ app._avatarSynced=true; try{ syncAvatarToServer(app.state.user.photo); }catch(_){} }
+    // one-time: push the local name so the leaderboard shows the REAL name (not the
+    // "متعلّم" fallback). Self-heals accounts whose name never persisted to the server.
+    if(!app._nameSynced && app.state.user && (app.state.user.name||'').trim() && typeof TB.saveDisplayName==='function'){
+      app._nameSynced=true; try{ TB.saveDisplayName(app.state.user.name); }catch(_){}
+    }
     // throttle: at most once per 30s so the notify()-triggered re-render of home
     // doesn't re-fire the fetch in a loop.
     const now=Date.now();
@@ -2598,7 +2977,7 @@ SCREENS.home = (s)=>{
           h('span',{class:'num', style:{ fontSize:'15px', lineHeight:1 }}, ar(s.streak)),
           h('span',{style:{ fontSize:'10px', opacity:.92, fontWeight:800 }},'يوم')),
         h('button',{class:'press', onClick:()=>go('profile'), 'aria-label':'ملفي', style:{ borderRadius:'50%' }},
-          avatar({ photo:s.user.photo, initial:(s.user.name||'ص')[0], size:42, ring:`0 6px 0 ${T.PD}` }))),
+          avatar({ photo:s.user.photo, initial:initialOf(s.user.name,'ص'), size:42, ring:`0 6px 0 ${T.PD}` }))),
       // one-tap streak repair (only when a streak was just lost)
       repairCard(s, cont),
       // هدف اليوم — daily goal ring hero
@@ -2754,9 +3133,9 @@ function leaderboardCard(s){
     // REAL users only (no fake names). If you're the only one yet, show just you.
     rows = (TB.leaderboardCache && TB.leaderboardCache.length)
       ? TB.leaderboardCache
-      : [{ rank:1, name:s.user.name||'أنت', initial:(s.user.name||'أ')[0], pts:s.xp||0, me:true }];
+      : [{ rank:1, name:s.user.name||'أنت', initial:initialOf(s.user.name,'أ'), pts:s.xp||0, me:true }];
   } else {
-    const me={ rank:5, name:s.user.name||'أنت', initial:(s.user.name||'أ')[0], pts:s.xp, me:true };
+    const me={ rank:5, name:s.user.name||'أنت', initial:initialOf(s.user.name,'أ'), pts:s.xp, me:true };
     rows=LEADERBOARD.concat([me]);          // offline demo fallback only
   }
   if(!rows || !rows.length){
@@ -2771,7 +3150,11 @@ function leaderboardCard(s){
         top3 ? h('span',{style:{ width:'30px', display:'flex', justifyContent:'center' }}, medal(r.rank, 30))
              : h('span',{class:'num', style:{ width:'30px', textAlign:'center', color:r.me?T.P:T.faint, fontSize:'15px' }}, ar(r.rank)),
         avatar({ photo:(r.me ? (s.user.photo||r.avatar) : r.avatar)||null, initial:r.initial, size:34, bg:r.me?T.P:`hsl(${r.hue||220} 70% 60%)` }),
-        h('div',{style:{ flex:1, fontWeight:800, fontSize:'15px', color:r.me?T.PD:T.ink }}, r.name + (r.me?' (أنت)':'')),
+        h('div',{style:{ flex:1, fontWeight:800, fontSize:'15px', color:r.me?T.PD:T.ink }},
+          // bdi isolates the (possibly Latin) display name from the surrounding
+          // RTL paragraph so the " (أنت)" suffix always sits to the LEFT of the
+          // name in the RTL flow, not jammed against punctuation.
+          h('bdi', null, r.name), r.me?' (أنت)':''),
         h('div',{class:'num', style:{ fontSize:'15px', color:r.me?T.P:T.mut }}, ar(r.pts)));
     }));
 }
@@ -2972,10 +3355,10 @@ SCREENS.settings = (s)=>{
       // account
       card({ style:{'--i':1} },
         h('div',{style:{ display:'flex', alignItems:'center', gap:'13px' }},
-          avatar({ photo:s.user.photo, initial:(s.user.name||'ص')[0], size:54, ring:`0 5px 0 ${T.PD}` }),
+          avatar({ photo:s.user.photo, initial:initialOf(s.user.name,'ص'), size:54, ring:`0 5px 0 ${T.PD}` }),
           h('div',{style:{ flex:1 }},
             h('div',{style:{ fontSize:'18px', fontWeight:900 }}, s.user.name||'صديقي'),
-            h('div',{class:'en', style:{ fontSize:'13px', color:T.mut, direction:'ltr', textAlign:'left' }}, s.user.email||'—'),
+            h('div',{class:'en', style:{ fontSize:'13px', color:T.mut, direction:'ltr', textAlign:'left' }}, s.user.phone||s.user.email||'—'),
             h('div',{style:{ fontSize:'12px', color:T.P, fontWeight:800, marginTop:'2px' }}, s.isBeginner?'المستوى: مبتدئ':('المستوى: '+(s.level||'A1')) )),
           h('button',{class:'press', onClick:()=>go('profile'), style:{ color:T.P }}, ico('edit',{size:20})))),
       // subscription
@@ -3074,14 +3457,20 @@ function divider(){ return h('div',{style:{ height:'1.5px', background:T.line, m
 
 /* ===================== SUBSCRIPTION ===================== */
 const PLANS = {
-  yearly:  { id:'yearly',  ar:'سنوي',   price:999, per:'سنة',    tag:'أفضل عرض' },
-  monthly: { id:'monthly', ar:'شهري',   price:99,  per:'شهر',    tag:'الخيار الشهير' },
-  weekly:  { id:'weekly',  ar:'أسبوعي', price:29,  per:'أسبوع',  tag:null },
+  yearly:  { id:'yearly',  ar:'سنوي',   price:399.99, per:'سنة',    tag:'أفضل عرض' },
+  monthly: { id:'monthly', ar:'شهري',   price:49.99,  per:'شهر',    tag:'الخيار الشهير' },
+  weekly:  { id:'weekly',  ar:'أسبوعي', price:29.99,  per:'أسبوع',  tag:null },
 };
-/* Premium entitlement = a paid `subscribed` flag OR an active referral-earned
-   `premium_until` (server-authoritative). Gating reads go through isSubbed(). */
+/* Premium entitlement — three sources, all OR'd:
+     1) s.entitled — SERVER-AUTHORITATIVE flag from is_entitled() RPC (migration 0020).
+        On native, this is the truth source (active sub OR premium_until > now()).
+        Refreshed on boot/auth/purchase by IAP.refreshEntitlementFromServer().
+     2) s.subscribed — legacy client-only flag from the original fake paywall;
+        kept so the web build (no IAP yet) keeps working as it does today.
+     3) premium_until — referral-earned months (also surfaced via is_entitled,
+        kept here for offline UX before the server roundtrip completes). */
 function premiumActive(s){ s=s||app.state; const v=s&&s.premium_until; let t=0; if(typeof v==='number') t=v; else if(typeof v==='string'&&v) t=Date.parse(v); return !!t && !isNaN(t) && Date.now()<t; }
-function isSubbed(s){ s=s||app.state; return !!(s&&s.subscribed) || premiumActive(s); }
+function isSubbed(s){ s=s||app.state; return !!(s&&s.entitled) || !!(s&&s.subscribed) || premiumActive(s); }
 const SUB_FEATURES = [
   { icon:'map',  t:'كل الدروس والمستويات', d:'من A1 إلى C1 — بدون حدود' },
   { icon:'chat', t:'محادثات بلا حد مع مايا', d:'مارس النطق في أي وقت' },
@@ -3174,27 +3563,105 @@ function referralCard(s){
 }
 SCREENS.paywall = (s)=>{
   const chosen = s.ui.plan || 'monthly';
+  const reason = s.ui.paywallReason || '';                // 'daily_limit' when free user hit 1/day
+  const iapOn = (typeof IAP!=='undefined') && IAP.available && IAP.available();
+
+  /* Lazy-fetch RevenueCat offerings on first paywall render. Prices are read
+     from the offering when present; we fall back to PLANS constants otherwise
+     (web, or native before the first offering fetch lands). */
+  const offering = s.ui.iapOffering || null;
+  if(iapOn && !offering && !s.ui.iapOfferingBusy){
+    app.setUI({ iapOfferingBusy:true });
+    Promise.resolve(IAP.getOfferings()).then(o=>{
+      app.setUI({ iapOffering:o||null, iapOfferingBusy:false });
+    }).catch(()=>{ app.setUI({ iapOfferingBusy:false }); });
+  }
+  /* Build a PLANS-like view for each plan key. When the RevenueCat package is
+     available we use ITS localized price (string) — never hardcoded. */
+  const planView = (key)=>{
+    const base = PLANS[key] || PLANS.monthly;
+    let priceStr = ar(base.price)+' ريال';
+    let pkg = null;
+    if(offering && Array.isArray(offering.availablePackages)){
+      for(const p of offering.availablePackages){
+        if(IAP.planKeyFor(p) === key){
+          pkg = p;
+          const ps = p.product && (p.product.priceString || p.product.price_string);
+          if(ps) priceStr = String(ps);
+          break;
+        }
+      }
+    }
+    return Object.assign({}, base, { _priceStr: priceStr, _pkg: pkg });
+  };
   const planCard=(p)=>{ const on=chosen===p.id;
     return h('button',{class:'press', onClick:()=>app.setUI({plan:p.id}), style:{ width:'100%', textAlign:'start', display:'flex', alignItems:'center', gap:'12px',
       background: on?T.Psoft:'#fff', border:`2.5px solid ${on?T.P:T.line}`, borderRadius:'18px', padding:'15px', boxShadow: on?`0 5px 0 ${T.P}`:`0 5px 0 ${T.edge}`, position:'relative' }},
       h('span',{style:{ width:'24px', height:'24px', borderRadius:'50%', border:`2.5px solid ${on?T.P:'#cdd2ee'}`, background:on?T.P:'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}, on?ico('check',{size:14, sw:3, color:'#fff'}):null),
       h('div',{style:{ flex:1 }},
         h('div',{style:{ fontSize:'17px', fontWeight:900 }}, 'باقة '+p.ar),
-        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }}, p.id==='monthly'?'يتجدد كل شهر':p.id==='yearly'?'يتجدد كل سنة • وفّر ~١٦٪':'يتجدد كل أسبوع')),
+        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }}, p.id==='monthly'?'يتجدد كل شهر':p.id==='yearly'?'يتجدد كل سنة • وفّر ~٣٢٪':'يتجدد كل أسبوع')),
       h('div',{style:{ textAlign:'center', flexShrink:0 }},
-        h('div',null, h('span',{class:'num', style:{ fontSize:'24px', color:T.PD }}, ar(p.price)), h('span',{style:{ fontSize:'12px', color:T.mut, fontWeight:800 }},' ريال')),
+        h('div',null, h('span',{class:'num', style:{ fontSize:'22px', color:T.PD }}, p._priceStr)),
         h('div',{style:{ fontSize:'11px', color:T.faint, fontWeight:800 }},'/'+p.per)),
       p.tag ? h('span',{style:{ position:'absolute', top:'-11px', insetInlineEnd:'14px', background:T.Y, color:'#5c4a00', fontSize:'10.5px', fontWeight:900, padding:'3px 9px', borderRadius:'99px' }}, p.tag) : null);
   };
-  const subscribe=()=>{ app.set({ subscribed:true, plan:chosen }); go('sub_success',{},{resetStack:true}); };
+
+  const planMonthly = planView('monthly');
+  const planYearly  = planView('yearly');
+  const planWeekly  = planView('weekly');
+  const chosenView  = chosen==='yearly' ? planYearly : chosen==='weekly' ? planWeekly : planMonthly;
+
+  const subscribe=()=>{
+    if(!iapOn){
+      // Web / no key yet — keep the legacy fake-subscribe so the flow is still
+      // demoable. The native binary always has iapOn=true once the key is set.
+      app.set({ subscribed:true, plan:chosen, entitled:true });
+      go('sub_success',{},{resetStack:true});
+      return;
+    }
+    const pkg = chosenView._pkg;
+    if(!pkg){ toast('لحظة... نحمّل الباقات'); return; }
+    if(app._iapBusy) return; app._iapBusy=true;
+    Promise.resolve(IAP.purchasePackage(pkg)).then(()=>{
+      // Optimistic flip; the RevenueCat webhook will reconcile within seconds.
+      app.set({ entitled:true, plan:chosen });
+      try{ IAP.refreshEntitlementFromServer(); }catch(_){}
+      app._iapBusy=false;
+      go('sub_success',{},{resetStack:true});
+    }).catch(err=>{
+      app._iapBusy=false;
+      // Apple/RevenueCat cancellation = userCancelled — don't toast an error for it.
+      const msg=String((err&&err.message)||err||'');
+      if(/cancel|userCancelled|1\b/i.test(msg)) return;
+      toast('تعذر إتمام الشراء — حاول مرة ثانية');
+    });
+  };
+
+  const restore=()=>{
+    if(!iapOn) return;
+    if(app._iapBusy) return; app._iapBusy=true;
+    Promise.resolve(IAP.restorePurchases()).then(()=>{
+      try{ IAP.refreshEntitlementFromServer(); }catch(_){}
+      app._iapBusy=false;
+      // After the server refreshes, isSubbed() will reflect reality on the next render.
+      toast('استعدنا مشترياتك ✓');
+    }).catch(()=>{ app._iapBusy=false; toast('تعذرت الاستعادة'); });
+  };
+
+  const headTitle = reason==='daily_limit' ? 'خلصت درس اليوم' : 'افتح كل الدروس';
+  const headSub   = reason==='daily_limit'
+    ? 'في الباقة المجانية تقدر تفتح درس واحد كل يوم. ارجع بكرة أو اشترك واستمر بدون توقف.'
+    : 'كل اللي تحتاجه للطلاقة';
+
   return frame(
     statusBar(),
-    lessonTop(0, 'طلاقة بريميوم', ()=>back()),
+    lessonTop(0, 'طلاقة بريميوم', ()=>{ try{ app.setUI({ paywallReason:'' }); }catch(_){} back(); }),
     body({pad:'8px 20px 0'},
       h('div',{style:{ textAlign:'center','--i':0 }},
         h('div',{class:'pop', style:{ width:'82px', height:'82px', borderRadius:'24px', background:`linear-gradient(135deg,${T.P},${T.PD})`, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', margin:'2px auto 0', boxShadow:`0 8px 0 ${T.PD}` }}, starBadge(46)),
-        h('div',{style:{ fontSize:'23px', fontWeight:900, marginTop:'11px' }},'افتح كل الدروس'),
-        h('div',{style:{ fontSize:'13.5px', color:T.mut, fontWeight:700, marginTop:'2px' }},'كل اللي تحتاجه للطلاقة')),
+        h('div',{style:{ fontSize:'23px', fontWeight:900, marginTop:'11px' }}, headTitle),
+        h('div',{style:{ fontSize:'13.5px', color:T.mut, fontWeight:700, marginTop:'2px', maxWidth:'320px', margin:'2px auto 0', lineHeight:1.6 }}, headSub)),
       card({ p:14, style:{ marginTop:'14px','--i':1 }},
         h('div',{style:{ fontSize:'13px', fontWeight:900, color:T.PD, marginBottom:'11px' }},'وش اللي بتفتح مع بريميوم؟'),
         h('div',{style:{ display:'flex', flexDirection:'column', gap:'11px' }},
@@ -3204,10 +3671,15 @@ SCREENS.paywall = (s)=>{
               h('div',{style:{ fontSize:'14px', fontWeight:900 }}, f.t),
               h('div',{style:{ fontSize:'11.5px', color:T.mut, fontWeight:600 }}, f.d)))))),
       h('div',{style:{ display:'flex', flexDirection:'column', gap:'16px', marginTop:'20px','--i':2 }},
-        planCard(PLANS.monthly), planCard(PLANS.yearly), planCard(PLANS.weekly)),
-      h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, textAlign:'center', marginTop:'12px', lineHeight:1.6,'--i':3 }},
-        'الدفع تجريبي الحين (واجهة فقط) وبنربطه بمحفظة لاحقاً — ما بنطلب بيانات بطاقة.')),
-    footer(bigBtn('اشترك الحين — '+ar(PLANS[chosen].price)+' ريال/'+PLANS[chosen].per, { icon:'arrowL', onClick:subscribe }))
+        planCard(planMonthly), planCard(planYearly), planCard(planWeekly)),
+      iapOn
+        ? h('div',{style:{ textAlign:'center', marginTop:'14px','--i':3 }},
+            h('button',{class:'press', onClick:restore, style:{ background:'transparent', color:T.P, fontWeight:800, fontSize:'13px', padding:'6px 10px' }},'استعادة المشتريات'),
+            h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, marginTop:'8px', lineHeight:1.7 }},
+              'تجربة مجانية ٣ أيام، بعدها يتجدد الاشتراك تلقائياً من حساب آبل. تقدر تلغيه في أي وقت من إعدادات الآي‌كلاود.'))
+        : h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, textAlign:'center', marginTop:'12px', lineHeight:1.6,'--i':3 }},
+            'الدفع متاح الحين في تطبيق آيفون فقط. على الويب الباقات للعرض.')),
+    footer(bigBtn('اشترك الحين — '+chosenView._priceStr+'/'+chosenView.per, { icon:'arrowL', onClick:subscribe }))
   );
 };
 
@@ -3254,6 +3726,17 @@ function syncAvatarToServer(dataUrl){
       }catch(_){ try{ TB.saveAvatar(dataUrl); }catch(_2){} } };
     img.onerror=()=>{ try{ TB.saveAvatar(dataUrl); }catch(_){} };
     img.src=dataUrl;
+  }catch(_){}
+}
+/* Push the learner's display name to the account so the leaderboard shows their
+   REAL name for everyone (not the "متعلّم" fallback). Best-effort, like avatar sync. */
+function syncNameToServer(name){
+  try{
+    const TB=(typeof window!=='undefined')&&window.TalaqaBackend;
+    if(!(TB&&TB.enabled&&TB.saveDisplayName)) return;
+    const nm=(name||'').trim(); if(!nm) return;
+    app._nameSynced=true;   // we've now pushed the latest name; skip the load-time resync
+    TB.saveDisplayName(nm);
   }catch(_){}
 }
 /* ===================== PROFILE HUB (read-first identity) ===================== */
@@ -3391,7 +3874,7 @@ SCREENS.profile = (s)=>{
     body({pad:'14px 20px 0', gap:'16px'},
       // identity header
       h('div',{style:{ display:'flex', flexDirection:'column', alignItems:'center', gap:'10px', marginTop:'4px','--i':0 }},
-        avatar({ photo:s.user.photo||'', initial:(s.user.name||'ص')[0], size:104, ring:`0 7px 0 ${T.PD}` }),
+        avatar({ photo:s.user.photo||'', initial:initialOf(s.user.name,'ص'), size:104, ring:`0 7px 0 ${T.PD}` }),
         h('div',{style:{ fontSize:'22px', fontWeight:900, color:T.ink }}, s.user.name||'صديقي'),
         h('div',{style:{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center' }},
           h('span',{style:{ background:T.Psoft, color:T.PD, fontWeight:900, fontSize:'12.5px', padding:'6px 13px', borderRadius:'99px' }}, titleFor(s)),
@@ -3437,7 +3920,18 @@ SCREENS.profile_edit = (s)=>{
       img.src=rd.result; };
     rd.readAsDataURL(f);
   };
-  const save=()=>{ app.set({ user:Object.assign({}, s.user, { name:(nm||'').trim()||s.user.name, photo:photo }) }); syncAvatarToServer(photo); app._avatarSynced=true; toast('تم حفظ الملف الشخصي ✅'); go('profile',{},{resetStack:true}); };
+  const save=()=>{
+    const newName=(nm||'').trim();
+    // Reject empty names BEFORE saving the photo. Previously, an empty trimmed
+    // name silently fell back to the old name AND still saved the photo + showed
+    // "✅ saved", so the user thought their empty-name attempt was rejected
+    // when really only the name was. Mirrors onboard_name's gate.
+    if(!newName){ toast('اكتب اسمك أول'); return; }
+    app.set({ user:Object.assign({}, s.user, { name:newName, photo:photo }) });
+    syncAvatarToServer(photo); app._avatarSynced=true; syncNameToServer(newName);
+    toast('تم حفظ الملف الشخصي ✅');
+    go('profile',{},{resetStack:true});
+  };
   return frame(
     statusBar(),
     lessonTop(0, 'عدّل حسابك', ()=>go('profile',{},{resetStack:true})),
@@ -3445,7 +3939,7 @@ SCREENS.profile_edit = (s)=>{
       h('input',{ id:'photoInput', type:'file', accept:'image/*', style:{ display:'none' }, onChange:onFile }),
       h('div',{style:{ display:'flex', flexDirection:'column', alignItems:'center', gap:'12px', marginTop:'8px','--i':0 }},
         h('button',{class:'press', onClick:pick, 'aria-label':'غيّر الصورة', style:{ position:'relative', borderRadius:'50%' }},
-          avatar({ photo:photo, initial:(nm||'ص')[0], size:120, ring:`0 7px 0 ${T.PD}` }),
+          avatar({ photo:photo, initial:initialOf(nm,'ص'), size:120, ring:`0 7px 0 ${T.PD}` }),
           h('span',{style:{ position:'absolute', bottom:'0', insetInlineEnd:'0', width:'38px', height:'38px', borderRadius:'50%', background:T.P, color:'#fff', border:'3px solid #fff', display:'flex', alignItems:'center', justifyContent:'center' }}, ico('edit',{size:16}))),
         h('button',{class:'press', onClick:pick, style:{ color:T.P, fontWeight:900, fontSize:'14px' }}, photo?'غيّر الصورة':'أضف صورة'),
         photo ? h('button',{class:'press', onClick:()=>app.setUI({photo:''}), style:{ color:T.bad, fontWeight:800, fontSize:'12.5px' }},'احذف الصورة') : null),
@@ -3465,7 +3959,12 @@ SCREENS.unit_hub = (s)=>{
   // bar doesn't read 5/5 (complete) while writing is still pending.
   const hasW=!!app._writing;
   const total=SECTION_ORDER.length+(hasW?1:0);
-  const done=sectionsDoneCount()+((hasW && s.sections.writing==='done')?1:0);
+  // Re-entering a chapter the learner already finished must show all sections as
+  // done (review state), not the reset/locked initial state — `sections` only
+  // tracks the CURRENT chapter, so switching away and back wipes it.
+  const isReviewed=!!(s.doneChapters||{})[s.currentChapter];
+  const done=isReviewed ? total
+    : sectionsDoneCount()+((hasW && s.sections.writing==='done')?1:0);
   return frame(
     statusBar(),
     lessonTop(done/total, UNIT.name, ()=>tabGo('journey')),
@@ -3483,7 +3982,7 @@ SCREENS.unit_hub = (s)=>{
       h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, padding:'2px 4px','--i':1 }},'كمّل الأقسام بالترتيب'),
       // sections
       ...sectionMeta().map((sec,idx)=>{
-        const st=s.sections[sec.id];
+        const st=isReviewed ? 'done' : s.sections[sec.id];
         return sectionRow(sec, st, idx+2);
       }),
       // optional bonus: writing — only for high levels (B1/B2/C1) once a generated chapter is loaded
@@ -3636,8 +4135,13 @@ function spellUI(cfg){
   const check=()=>{
     const v=(document.getElementById('spellInput')||{}).value||'';
     if(!v.trim()){ toast('اكتب الكلمة الأولى'); return; }
-    if(norm(v)===norm(cfg.answer)){ buzz(18); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'ok', spellVal:v}); }
-    else { buzz([10,40,10]); try{ SFX.wrong(); }catch(_){} if(cfg.onWrong){ try{ cfg.onWrong(); }catch(_){} } app.setUI({spellResult:'no', spellVal:v, spellTries:tries+1}); }
+    const nv=norm(v), na=norm(cfg.answer);
+    // a near-miss (one space / one letter off; two for long words) is NOT wrong —
+    // it's "قريب": gentle yellow, show the correct spelling, let them continue.
+    const tol=na.length>=8?2:1;
+    if(nv===na){ buzz(18); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'ok', spellVal:v}); }
+    else if(nv && _editDist(nv,na)<=tol){ buzz(12); try{ SFX.correct(); }catch(_){} app.setUI({spellResult:'close', spellVal:v}); }
+    else { buzz([10,40,10]); try{ SFX.wrong(); }catch(_){} if(cfg.onWrong){ try{ cfg.onWrong(); }catch(_){} } app.setUI({spellResult:'no', spellVal:v, spellTries:tries+1, spellReveal:false}); }
   };
   let bodyKids, foot;
   const head = card({ style:{'--i':1} },
@@ -3649,10 +4153,15 @@ function spellUI(cfg){
   if(res==='ok'){
     bodyKids=[ head, feedbackBox(true, cfg.answer, null) ];
     foot=bigBtn('كمّل', { bg:T.good, sh:T.goodD, pop:true, icon:'arrowL', onClick:cfg.onPass });
-  } else if(res==='no'){
-    bodyKids=[ head, feedbackBox(false, cfg.answer, typed) ];
+  } else if(res==='close'){
+    bodyKids=[ head, feedbackBoxClose(cfg.answer, typed) ];
     foot=h('div',{style:{ display:'flex', gap:'10px' }},
-      h('div',{style:{flex:1}}, bigBtn('جرّب مرة ثانية', { bg:'#fff', sh:T.line, color:T.P, iconBefore:'refresh', onClick:()=>app.setUI({spellResult:null}) })),
+      h('div',{style:{flex:1}}, bigBtn('جرّب مرة ثانية', { bg:'#fff', sh:T.line, color:T.Yink, iconBefore:'refresh', onClick:()=>app.setUI({spellResult:null}) })),
+      h('div',{style:{flex:1}}, bigBtn('كمّل', { bg:T.Y, sh:T.Yd, color:T.Yink, icon:'arrowL', onClick:cfg.onPass })));
+  } else if(res==='no'){
+    bodyKids=[ head, feedbackBoxWrong(cfg.answer, typed, !!s.ui.spellReveal, ()=>app.setUI({spellReveal:true})) ];
+    foot=h('div',{style:{ display:'flex', gap:'10px' }},
+      h('div',{style:{flex:1}}, bigBtn('جرّب مرة ثانية', { bg:'#fff', sh:T.line, color:T.P, iconBefore:'refresh', onClick:()=>app.setUI({spellResult:null, spellReveal:false}) })),
       h('div',{style:{flex:1}}, bigBtn('كمّل', { icon:'arrowL', onClick:cfg.onPass })));
   } else {
     bodyKids=[ head,
@@ -3678,6 +4187,32 @@ function feedbackBox(ok, answer, typed){
     !ok && typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.bad, marginTop:'4px', textDecoration:'line-through' }}, typed) : null,
     h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'6px' }},'الكتابة الصحيحة:'),
     h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:ok?T.goodD:T.ink, marginTop:'2px' }}, answer));
+}
+/* WRONG — unlike feedbackBox we do NOT reveal the answer outright. Encourage with
+   "حاول مرة أخرى" and keep the correct spelling hidden behind a "شوف الكلمة" button;
+   only after the learner taps it do we show the word (same reveal styling as above). */
+function feedbackBoxWrong(answer, typed, revealed, onReveal){
+  return h('div',{class:'pop', style:{ background:T.badSoft, borderRadius:'20px', padding:'18px', textAlign:'center','--i':2 }},
+    h('div',{style:{ width:'52px', height:'52px', borderRadius:'50%', background:T.bad, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 8px' }}, ico('x',{size:28, sw:3})),
+    h('div',{style:{ fontWeight:900, fontSize:'17px', color:T.bad }},'حاول مرة أخرى'),
+    typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.bad, marginTop:'4px', textDecoration:'line-through' }}, typed) : null,
+    revealed
+      ? h('div',{class:'pop'},
+          h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'10px' }},'الكتابة الصحيحة:'),
+          h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:T.ink, marginTop:'2px' }}, answer))
+      : h('button',{class:'press btn3d', onClick:onReveal, style:{ marginTop:'14px', display:'inline-flex', alignItems:'center', gap:'7px',
+          background:T.card, color:T.bad, fontWeight:900, fontSize:'14px', padding:'11px 20px', borderRadius:'14px', boxShadow:`0 4px 0 ${T.edge}` }},
+          ico('eye',{size:18, sw:2.4}), h('span',null,'شوف الكلمة')));
+}
+/* "قريب" — a near-miss (one space / one letter off). Encouraging YELLOW, not red:
+   we don't mark it wrong, we show the correct spelling and let them carry on. */
+function feedbackBoxClose(answer, typed){
+  return h('div',{class:'pop', style:{ background:T.Ysoft, borderRadius:'20px', padding:'18px', textAlign:'center','--i':2 }},
+    h('div',{style:{ width:'52px', height:'52px', borderRadius:'50%', background:T.Yd, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', margin:'0 auto 8px', fontSize:'28px', fontWeight:900, lineHeight:1 }},'≈'),
+    h('div',{style:{ fontWeight:900, fontSize:'17px', color:T.Yink }},'قريب جداً! 👏'),
+    typed ? h('div',{class:'en', style:{ fontSize:'14px', color:T.Yink, opacity:.75, marginTop:'4px' }}, typed) : null,
+    h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'6px' }},'الكتابة الصحيحة:'),
+    h('div',{class:'en', style:{ fontSize:'24px', fontWeight:800, color:T.Yink, marginTop:'2px' }}, answer));
 }
 SCREENS.word_spell = (s)=>{ const i=s.params.i||0, w=WORDS[i]; if(!w) return bounceFrame('إملاء');
   return spellUI({ word:w.ar, answer:w.en, audioWord:w.en, progress:wordProg(i,0.35), label:`إملاء • ${ar(i+1)}/${ar(WORDS.length)}`,
@@ -4964,8 +5499,27 @@ function boot(){
       capInvoke('SplashScreen','hide',{}).catch(()=>{});
       capInvoke('StatusBar','setStyle',{ style: app.state.darkMode ? 'DARK' : 'LIGHT' }).catch(()=>{});
       capInvoke('StatusBar','setBackgroundColor',{ color: app.state.darkMode ? '#0e1220' : '#eef1ff' }).catch(()=>{});
+      // RevenueCat: configure once the native app is up. logIn happens after auth
+      // resolves (see TB.init / talaqa:ready below). Safe to call without uid; the
+      // SDK uses an anonymous id until logIn() is called.
+      try{ if(IAP && IAP.available && IAP.available()) IAP.configure(null).catch(()=>{}); }catch(_){}
     }
   }catch(_){}
+
+  // After Supabase auth resolves, sync entitlement + identify the user to RevenueCat.
+  // Fires on the bridge's "ready" event (post sb.auth.getUser) and on visibility
+  // resume so a returning user gets a fresh entitlement read.
+  function _postAuthIAP(){
+    try{
+      const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+      if(!TB || !TB._user || !TB._user.id) return;
+      const uid = TB._user.id;
+      if(IAP && IAP.available && IAP.available()){ IAP.logIn(uid).catch(()=>{}); }
+      if(IAP && IAP.refreshEntitlementFromServer) IAP.refreshEntitlementFromServer();
+    }catch(_){}
+  }
+  try{ window.addEventListener('talaqa:ready', _postAuthIAP); }catch(_){}
+  try{ document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) _postAuthIAP(); }); }catch(_){}
 
   // Decide the destination after the splash. When the backend is configured we
   // restore the Supabase session + cloud progress; otherwise we use the local

@@ -201,6 +201,39 @@ const TB = {
     // would reset a returning user to "beginner").
     const saved = await this.loadState();
     const patch = (saved && typeof saved === "object") ? saved : {};
+    // Read the SERVER profile too, independently of the state.json blob. This is
+    // the cross-device source-of-truth for display_name / avatar_url and is the
+    // server-authoritative onboarding_completed flag the verify path uses to
+    // decide isNew (no more guessing from `patch.level`). Wrapped in its own
+    // try/catch so a profile-read failure does not break sign-in.
+    let prof = null;
+    try {
+      let uid = this._user?.id;
+      if (!uid) { try { uid = (await sb.auth.getUser()).data.user?.id; } catch (_) {} }
+      if (uid) {
+        const res = await withTimeout(
+          sb.from("profiles").select("display_name,avatar_url,goal,age,onboarding_completed,premium_until").eq("id", uid).single(),
+          T_DB, "profile",
+        );
+        if (res && !res.error) prof = res.data || null;
+      }
+    } catch (_) {}
+    if (prof) {
+      patch._serverOnboardingCompleted = !!prof.onboarding_completed;
+      // Prefer local (potentially fresher) values; fall back to server. Empty
+      // strings on the client should NOT mask a real server value.
+      const u = (patch.user && typeof patch.user === "object") ? patch.user : {};
+      patch.user = Object.assign({}, u, {
+        name:       (u.name && String(u.name).trim()) || prof.display_name || u.name || "",
+        avatar:     u.avatar || prof.avatar_url || null,
+        goal:       u.goal || prof.goal || null,
+        age:        u.age || prof.age || null,
+      });
+      if (prof.display_name) this._localName = String(prof.display_name).trim();
+      // Server-authoritative premium_until — overrides client cache. The
+      // referralStats read below may override again with the merged value.
+      if (prof.premium_until) patch.premium_until = prof.premium_until;
+    }
     try { patch._leaderboard = await this.getLeaderboard(8); } catch (_) {}
     // Referral stats + server-authoritative premium entitlement. Overrides any
     // stale premium_until from the client blob with the value the server computes.
@@ -306,8 +339,10 @@ const TB = {
     const hues = [18, 250, 325, 160, 210, 40, 280];
     const rows = data.map((r, i) => ({
       rank: Number(r.rank),
-      name: r.display_name || "متعلّم",
-      initial: ((r.display_name || "؟").trim()[0]) || "؟",
+      // Prefer the server's real name; for the caller's own row, fall back to the
+      // locally-known name before the generic placeholder so "me" is never "متعلّم".
+      name: r.display_name || (r.is_me && this._localName) || "متعلّم",
+      initial: (Array.from((r.display_name || (r.is_me && this._localName) || "؟").trim())[0]) || "؟",
       pts: r.total_xp || 0,
       hue: hues[i % hues.length],
       avatar: r.avatar_url || null, // participant photo (shown in the leaderboard)
@@ -326,6 +361,23 @@ const TB = {
     if (!uid) { try { uid = (await sb.auth.getUser()).data.user?.id; } catch (_) {} }
     if (!uid) return false;
     try { const { error } = await sb.from("profiles").update({ avatar_url: url || null }).eq("id", uid); return !error; } catch (_) { return false; }
+  },
+
+  /** Persist the learner's display name to profiles so the leaderboard shows
+   *  their REAL name (not the "متعلّم" fallback) for everyone. Owner-writable
+   *  via RLS (display_name is a non-trusted column). Best-effort; self-heals
+   *  accounts whose name never persisted (e.g. a dropped onboarding call or a
+   *  phone sign-up with no email prefix). Remembers the local name so getLeaderboard
+   *  can label the caller's own row even before the write round-trips. */
+  async saveDisplayName(name) {
+    const nm = (name || "").trim();
+    if (nm) this._localName = nm;
+    const sb = await ensureClient();
+    if (!sb || !nm) return false;
+    let uid = this._user?.id;
+    if (!uid) { try { uid = (await sb.auth.getUser()).data.user?.id; } catch (_) {} }
+    if (!uid) return false;
+    try { const { error } = await sb.from("profiles").update({ display_name: nm }).eq("id", uid); return !error; } catch (_) { return false; }
   },
 
   // ---- Stage 2 strict path (used once content is hydrated with DB ids) ------
@@ -369,6 +421,38 @@ const TB = {
     const { data, error } = await withTimeout(sb.rpc("get_referral_stats"), T_DB, "ref-stats");
     if (error) throw error;
     return data;
+  },
+  // ---- Entitlement (paywall / IAP) ----------------------------------------
+  /** Server-authoritative "does this user have paid access right now?"
+   *  Reads from the is_entitled(uid) DB function (migration 0020). Returns a
+   *  boolean (false on any error so we fail closed: no free passes on glitches). */
+  async isEntitled() {
+    const sb = await ensureClient(); if (!sb) return false;
+    try {
+      const u = await sb.auth.getUser();
+      const uid = u && u.data && u.data.user && u.data.user.id;
+      if (!uid) return false;
+      const { data, error } = await withTimeout(sb.rpc("is_entitled", { p_user_id: uid }), T_DB, "is-entitled");
+      if (error) return false;
+      return !!data;
+    } catch (_) { return false; }
+  },
+  /** Atomic free-tier daily-section gate (migration 0020). Paid users always
+   *  pass; free users are limited to 1 section per local-tz day. Returns the
+   *  RPC row { allowed, entitled, count, cap } or null on transport failure.
+   *  Callers SHOULD treat null as "allowed" only on the web build (offline-
+   *  tolerant); native must fail-closed. */
+  async consumeDailySection() {
+    const sb = await ensureClient(); if (!sb) return null;
+    try {
+      const u = await sb.auth.getUser();
+      const uid = u && u.data && u.data.user && u.data.user.id;
+      if (!uid) return null;
+      const { data, error } = await withTimeout(sb.rpc("consume_daily_section", { p_user_id: uid }), T_DB, "consume-section");
+      if (error) return null;
+      // The DEFINER RPC returns a single setof row; supabase-js may give an array.
+      return Array.isArray(data) ? (data[0] || null) : (data || null);
+    } catch (_) { return null; }
   },
   async tutor({ targetWords, level, goal, history, userText, opener } = {}) {
     return await this._invoke("tutor", {
