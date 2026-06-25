@@ -373,22 +373,28 @@ const TB = {
     // Empty names still fall through to the localized default below.
     const DROP_NAMES = new Set(["lbtester","lb tester","qa","qatest","test","tester","talaqa qa","talaqa test"]);
     const cleaned = data.filter(r => {
-      const n = String(r.display_name || "").trim();
-      if (/^del[0-9]{6,}/i.test(n)) return false;                // soft-deleted id leak
-      if (DROP_NAMES.has(n.toLowerCase())) return false;          // QA accounts
+      // For the caller's own row, fall back to the locally-known name BEFORE the
+      // empty-name drop so "me" can still show up even if the server write
+      // hasn't landed yet (display_name is best-effort from saveDisplayName).
+      const raw = r.display_name || (r.is_me ? self._localName : "");
+      const n = String(raw || "").trim();
+      if (!n) return false;                                       // anonymous: never show
+      if (/^del[0-9]{6,}/i.test(n)) return false;                 // soft-deleted id leak
+      if (DROP_NAMES.has(n.toLowerCase())) return false;           // QA accounts
       return true;
     });
-    const rows = cleaned.map((r, i) => ({
-      rank: i + 1,                                                // re-dense-rank after the drops
-      // Prefer the server's real name; for the caller's own row, fall back to the
-      // locally-known name before the generic placeholder so "me" is never "متعلّم".
-      name: r.display_name || (r.is_me && self._localName) || "متعلّم مجهول",
-      initial: (Array.from((r.display_name || (r.is_me && self._localName) || "؟").trim())[0]) || "؟",
-      pts: r.total_xp || 0,
-      hue: hues[i % hues.length],
-      avatar: r.avatar_url || null, // participant photo (shown in the leaderboard)
-      me: !!r.is_me,
-    }));
+    const rows = cleaned.map((r, i) => {
+      const name = String(r.display_name || (r.is_me ? self._localName : "") || "").trim();
+      return {
+        rank: i + 1,                                              // dense-rank after the drops
+        name,
+        initial: Array.from(name)[0] || "؟",
+        pts: r.total_xp || 0,
+        hue: hues[i % hues.length],
+        avatar: r.avatar_url || null,                             // participant photo
+        me: !!r.is_me,
+      };
+    });
     self.leaderboardCache = rows;
     self._lbAt = Date.now();
     return rows;

@@ -12,11 +12,12 @@
 <meta name="apple-mobile-web-app-title" content="طلاقة">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<!-- Real curriculum (1280 words / 250 chapters / 45 placement Qs) -> window.CURRICULUM -->
+<!-- Real curriculum (1280 words / 250 chapters / 45 placement Qs) -> window.CURRICULUM.
+     Kept eager: needed by the journey/home shell and small enough (~281KB) not to stretch boot. -->
 <script defer src="content/curriculum.js"></script>
-<script defer src="content/examples.js"></script>
-<!-- Pre-generated lessons -> window.LESSONS = { "LEVEL:NO": lessonJson } (keyed like chapterKey) -->
-<script defer src="content/lessons.js"></script>
+<!-- HEAVY content (examples.js ~500KB, lessons.js ~2MB) is LAZY-loaded after first paint
+     in boot() — see _kickLazyContent below. Eager-loading them on iOS WKWebView added
+     1–3s of JS parse to the splash; nothing on the splash/auth/home shell consumes them. -->
 <!-- Supabase backend (optional). Fill app-config.js to enable accounts + cloud
      progress + leaderboard; leave it empty to run the offline local demo. -->
 <script src="app-config.js"></script>
@@ -26,7 +27,12 @@
 <script type="module" src="supabase-bridge.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<!-- Non-blocking webfont: ship the UI immediately with the system Arabic font
+     (Cairo/Tajawal/system-ui fallback chain) and swap in Cairo once it loads. The
+     blocking <link rel=stylesheet> previously held first paint for a full network
+     round-trip on every iOS cold launch. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap"></noscript>
 <style>
   :root{
     --p:#4f6bf0; --pd:#3a52d6; --psoft:#e6eaff; --ptint:#eef1ff;
@@ -620,6 +626,10 @@ function h(tag, props, ...kids){
 /* ===================== UTILS ===================== */
 const AR_DIG = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
 const ar = n => String(n); // numbers shown in English (Latin) digits everywhere
+/* Thousands-separated formatter for places where the number is shown raw and
+   could grow into the thousands (XP totals on the leaderboard, lifetime XP on
+   the profile). en-US gives "12,345"; smaller numbers pass through unchanged. */
+const fmt = n => { try{ return new Intl.NumberFormat('en-US').format(Number(n)||0); }catch(_){ return String(n); } };
 const clamp = (n,a,b)=>Math.max(a,Math.min(b,n));
 function toast(msg){
   const old=document.querySelector('.toast'); if(old) old.remove();
@@ -3124,7 +3134,7 @@ SCREENS.home = (s)=>{
       levelCard(s),
       // quick stats
       h('div',{style:{ display:'flex', gap:'11px','--i':3 }},
-        statCard('star', T.Yd, ar(s.xp), 'نقطة خبرة', ()=>toast('نقاط الخبرة تزيد مع كل قسم تكمله — اجمع المزيد! ⭐')),
+        statCard('star', T.Yd, fmt(s.xp), 'نقطة خبرة', ()=>toast('نقاط الخبرة تزيد مع كل قسم تكمله — اجمع المزيد! ⭐')),
         statCard('cards', T.P, ar(s.wordsLearned), 'كلمة', ()=>go('mywords')),
         statCard('flame', T.CO, ar(s.streak), 'يوم متتالي', ()=>toast('تعلّم كل يوم لتشتعل سلسلتك! 🔥'))),
       // weekly recap chip — XP earned in the current ISO-week
@@ -3260,14 +3270,26 @@ function wordOfDayCard(s){
 }
 function leaderboardCard(s){
   const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+  const myName = (s.user && s.user.name || '').trim();
+  // No name yet → never let "me" show up as a placeholder. Replace the
+  // leaderboard with a name-required CTA that opens the profile editor.
+  if(!myName){
+    return card({ p:14, style:{'--i':6, background:`linear-gradient(180deg,#ffffff,${T.Ptint})` }},
+      h('div',{style:{ display:'flex', alignItems:'center', gap:'12px' }},
+        h('span',{style:{ width:'46px', height:'46px', borderRadius:'14px', background:`linear-gradient(135deg,${T.P},${T.PD})`, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:'22px', boxShadow:`0 4px 0 ${T.PD}` }},'🏆'),
+        h('div',{style:{ flex:1, minWidth:0 }},
+          h('div',{style:{ fontSize:'15.5px', fontWeight:900 }},'اختر لك اسم'),
+          h('div',{style:{ fontSize:'12px', color:T.mut, fontWeight:700, marginTop:'1px' }},'لازم يكون عندك اسم عشان تظهر مع المتصدّرين')),
+        h('button',{class:'press', onClick:()=>go('profile_edit'), style:{ background:T.P, color:'#fff', fontWeight:900, fontSize:'13px', padding:'10px 16px', borderRadius:'13px', boxShadow:`0 4px 0 ${T.PD}`, flexShrink:0 }},'اكتبه')));
+  }
   let rows;
   if(TB && TB.enabled){
     // REAL users only (no fake names). If you're the only one yet, show just you.
     rows = (TB.leaderboardCache && TB.leaderboardCache.length)
       ? TB.leaderboardCache
-      : [{ rank:1, name:s.user.name||'أنت', initial:initialOf(s.user.name,'أ'), pts:s.xp||0, me:true }];
+      : [{ rank:1, name:myName, initial:initialOf(myName,'أ'), pts:s.xp||0, me:true }];
   } else {
-    const me={ rank:5, name:s.user.name||'أنت', initial:initialOf(s.user.name,'أ'), pts:s.xp, me:true };
+    const me={ rank:5, name:myName, initial:initialOf(myName,'أ'), pts:s.xp, me:true };
     rows=LEADERBOARD.concat([me]);          // offline demo fallback only
   }
   if(!rows || !rows.length){
@@ -3287,7 +3309,7 @@ function leaderboardCard(s){
           // RTL paragraph so the " (أنت)" suffix always sits to the LEFT of the
           // name in the RTL flow, not jammed against punctuation.
           h('bdi', null, r.name), r.me?' (أنت)':''),
-        h('div',{class:'num', style:{ fontSize:'15px', color:r.me?T.P:T.mut }}, ar(r.pts)));
+        h('div',{class:'num', style:{ fontSize:'15px', color:r.me?T.P:T.mut }}, fmt(r.pts)));
     }));
 }
 
@@ -5681,6 +5703,25 @@ function boot(){
   // Only fetch if the <script defer src="content/curriculum.js"> didn't already set
   // window.CURRICULUM — avoids a redundant ~MB download on every boot.
   try{ if(!window.CURRICULUM && typeof fetch!=='undefined'){ fetch('content/curriculum.json').then(r=>r.ok?r.json():null).then(d=>{ if(d){ window.CURRICULUM=d; try{ app.notify(); }catch(_){} } }).catch(()=>{}); } }catch(_){}
+
+  // LAZY content load (iOS perf): examples.js (~500KB) + lessons.js (~2MB) ship inside
+  // the binary but are only consumed inside a learning section, NOT on splash/auth/home.
+  // Parsing them eagerly at boot stretches first paint by 1–3s on a phone CPU (was the
+  // "slow/weak" feeling on the native wrap). Inject after the first frame is painted;
+  // any code that reads window.WORD_EXAMPLES / window.LESSONS already guards for absence.
+  // Each tag uses async=false so they preserve order with each other and don't block parser.
+  try{
+    const _addLazy = (src)=>new Promise((res)=>{
+      try{ const s=document.createElement('script'); s.src=src; s.async=false; s.onload=()=>res(true); s.onerror=()=>res(false); document.head.appendChild(s); }
+      catch(_){ res(false); }
+    });
+    const _kickLazyContent = ()=>{
+      _addLazy('content/examples.js').then(()=>{ try{ if(app.notify) app.notify(); }catch(_){} });
+      _addLazy('content/lessons.js').then(()=>{ try{ if(app.notify) app.notify(); }catch(_){} });
+    };
+    if(typeof requestIdleCallback==='function'){ requestIdleCallback(_kickLazyContent, { timeout: 1500 }); }
+    else { setTimeout(_kickLazyContent, 200); }   // iOS WKWebView path
+  }catch(_){}
 
   window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); window.__deferredPrompt = e; try{ app.notify(); }catch(_){} });
   window.addEventListener('appinstalled', ()=>{ window.__deferredPrompt=null; });
