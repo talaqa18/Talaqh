@@ -14,7 +14,7 @@ import { dirname, join } from "path";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = join(ROOT, "dist");
 
-const FILES = ["index.html", "supabase-bridge.js", "sw.js", "app-config.js", "manifest.webmanifest", "_headers"];
+const FILES = ["index.html", "supabase-bridge.js", "sw.js", "app-config.js", "manifest.webmanifest", "_headers", "privacy.html"];
 const DIRS = ["icons", "content", "vendor"];
 
 rmSync(DIST, { recursive: true, force: true });

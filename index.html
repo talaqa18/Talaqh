@@ -110,7 +110,13 @@
   .spin{ animation:spin .8s linear infinite }
   /* animated fire flame */
   @keyframes flicker{0%,100%{transform:scale(1,1) rotate(-1.5deg)} 25%{transform:scale(1.08,1.14) rotate(1.5deg)} 50%{transform:scale(.95,1.06) rotate(-1deg)} 75%{transform:scale(1.06,1.1) rotate(2deg)}}
+  /* L4: pause the .flame animation when the tab is hidden or the user
+     prefers reduced motion — the audit observed three infinite .flame
+     animations keeping the page from idling, burning battery in the
+     background. The data-hidden attribute is toggled on visibilitychange. */
   .flame{display:inline-flex; transform-origin:bottom center; animation:flicker 1s ease-in-out infinite}
+  body[data-hidden="1"] .flame{ animation-play-state: paused }
+  @media (prefers-reduced-motion: reduce){ .flame{ animation:none } }
   /* "well done" praise pop */
   @keyframes praisePop{0%{opacity:0; transform:translate(-50%,8px) scale(.7)} 22%{opacity:1; transform:translate(-50%,0) scale(1.06)} 70%{opacity:1; transform:translate(-50%,-2px) scale(1)} 100%{opacity:0; transform:translate(-50%,-30px) scale(1)}}
   .praise{position:absolute; left:50%; top:23%; z-index:22; animation:praisePop 1.3s ease-out forwards; pointer-events:none}
@@ -304,6 +310,118 @@ function capAddListener(plugin, eventName, cb){
    If boot() ever throws before it gets there, hide it anyway after a short delay so
    the app can never get permanently stuck on the launch screen. */
 try{ if(typeof window!=='undefined'){ window.addEventListener('load', ()=>{ try{ if(isNativeApp()) setTimeout(()=>{ capInvoke('SplashScreen','hide',{}).catch(()=>{}); }, 3000); }catch(_){} }); } }catch(_){}
+
+/* ===================== IAP (Apple In-App Purchase via RevenueCat) =====================
+   Native-only paywall. Web build stays free (no Stripe wired up).
+   * iOS calls the @revenuecat/purchases-capacitor plugin via capInvoke (no JS SDK
+     import — we have no bundler). The plugin auto-registers on the Swift side
+     when the package is installed via `npm install` + `npx cap sync`.
+   * Server entitlement (TB.isEntitled → is_entitled RPC, migration 0020) is the
+     truth source. Purchases SDK is the purchase machinery only.
+   * Optimistically flips app.state.entitled after a successful purchase/restore,
+     then reconciles from the server (RevenueCat webhook → subscriptions table). */
+const IAP = (function(){
+  const cfg = (typeof window!=='undefined' && window.__TALAQA_CONFIG__) || {};
+  let _configured=false, _configuring=null, _offeringsCache=null, _offeringsAt=0;
+  function publicKey(){ return cfg.revenueCatPublicKey || ''; }
+  function entitlementId(){ return cfg.entitlementId || 'talaqh_pro'; }
+  function available(){ return isNativeApp() && !!publicKey(); }
+  function _err(where, e){
+    try{ console.error('[IAP] '+where+' failed:', e); }catch(_){}
+    try{ window.__iapLastError = String((e&&e.message)||e); }catch(_){}
+  }
+  async function configure(uid){
+    if(!available()) return false;
+    if(_configured) return true;
+    if(_configuring) return _configuring;
+    _configuring = (async ()=>{
+      try{
+        await capInvoke('Purchases','configure',{ apiKey: publicKey(), appUserID: uid||null });
+        if(uid){ try{ await capInvoke('Purchases','logIn',{ appUserID: uid }); }catch(e){ _err('configure.logIn', e); } }
+        _configured = true;
+        try{ console.log('[IAP] configured. plugins=', Object.keys((window.Capacitor&&window.Capacitor.Plugins)||{})); }catch(_){}
+        return true;
+      }catch(e){ _err('configure', e); return false; }
+      finally{ _configuring = null; }
+    })();
+    return _configuring;
+  }
+  async function logIn(uid){
+    if(!available() || !uid) return null;
+    const ok = await configure(uid);
+    if(!ok) return null;
+    try{ return await capInvoke('Purchases','logIn',{ appUserID: uid }); }catch(e){ _err('logIn', e); return null; }
+  }
+  async function getOfferings(force){
+    if(!available()) return null;
+    const ok = await configure();
+    if(!ok) return null;
+    const now=Date.now();
+    if(!force && _offeringsCache && (now-_offeringsAt)<60000) return _offeringsCache;
+    try{
+      const res = await capInvoke('Purchases','getOfferings',{});
+      const off = (res && (res.current || (res.all && Object.values(res.all)[0]))) || null;
+      // Only CACHE an offering that actually has packages — otherwise an empty
+      // result from the StoreKit-sandbox propagation window or a transient
+      // ASC sync would poison the cache for 60s and lock the paywall.
+      if(off && Array.isArray(off.availablePackages) && off.availablePackages.length){
+        _offeringsCache = off; _offeringsAt = now;
+      } else {
+        _offeringsCache = null; _offeringsAt = 0;
+        try{ console.warn('[IAP] getOfferings returned no packages — sandbox tester signed in? products Ready to Submit?'); }catch(_){}
+      }
+      return _offeringsCache;
+    }catch(e){ _err('getOfferings', e); _offeringsCache=null; _offeringsAt=0; return null; }
+  }
+  async function purchasePackage(pkg){
+    if(!available() || !pkg) throw new Error('iap-unavailable');
+    return await capInvoke('Purchases','purchasePackage',{ aPackage: pkg });
+  }
+  async function restorePurchases(){
+    if(!available()) return null;
+    try{ return await capInvoke('Purchases','restorePurchases',{}); }catch(e){ _err('restorePurchases', e); return null; }
+  }
+  /* Refresh app.state.entitled from the SERVER (is_entitled RPC). Optimistic
+     callers can pre-flip entitled=true after a successful purchase; this then
+     reconciles with the webhook-updated subscriptions row within a few seconds.
+     H6: also reconcile the legacy local `subscribed` flag — the audit observed
+     subscribed:true / entitled:false / premium_until:null, which made Settings
+     show "مشترك بريميوم • مفعل" for a user who actually had no entitlement.
+     Treat the server's no-entitlement signal as the truth and clear the stale
+     local flag so Settings + gating both reflect reality. */
+  async function refreshEntitlementFromServer(){
+    try{
+      const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+      if(!TB || !TB.enabled || typeof TB.isEntitled!=='function') return;
+      const ent = await TB.isEntitled();
+      const patch = {};
+      if(app.state.entitled !== !!ent) patch.entitled = !!ent;
+      if(!ent && app.state.subscribed){ patch.subscribed = false; patch.plan = null; }
+      if(Object.keys(patch).length) app.set(patch);
+    }catch(e){ _err('refreshEntitlementFromServer', e); }
+  }
+  /* Maps a RevenueCat package to our PLANS key ('weekly' / 'monthly' / 'yearly').
+     Checks packageType first (the canonical RevenueCat field on v11), then falls
+     back to identifier/product-id substring matching for custom-named packages. */
+  function planKeyFor(pkg){
+    if(!pkg) return null;
+    const t = String(pkg.packageType||'').toLowerCase();
+    if(t==='weekly') return 'weekly';
+    if(t==='monthly') return 'monthly';
+    if(t==='annual' || t==='yearly') return 'yearly';
+    const id = String(pkg.identifier||'').toLowerCase();
+    if(id.includes('week')) return 'weekly';
+    if(id.includes('annual') || id.includes('year')) return 'yearly';
+    if(id.includes('month')) return 'monthly';
+    const prod = String((pkg.product && (pkg.product.identifier||pkg.product.id))||'').toLowerCase();
+    if(prod.includes('week')) return 'weekly';
+    if(prod.includes('year')) return 'yearly';
+    if(prod.includes('month')) return 'monthly';
+    return null;
+  }
+  return { available, configure, logIn, getOfferings, purchasePackage, restorePurchases, refreshEntitlementFromServer, planKeyFor, entitlementId };
+})();
+try{ if(typeof window!=='undefined') window.IAP = IAP; }catch(_){}
 function freshState(){
   return {
     screen:'splash', params:{}, stack:[],
@@ -316,6 +434,7 @@ function freshState(){
     darkMode:false,
     weekXp:0, weekKey:'',
     subscribed:false, plan:null,
+    entitled:false,                     // server-authoritative paid access (migration 0020 is_entitled)
     premium_until:null, pendingRef:'', referralStats:null,
     xp:0, xpToday:0, xpDay:'', dailyGoal:50, goalMetDay:'',
     streak:0, lastActiveDay:'', streakFreezes:1, freezeUsedDay:'', longestStreak:0, repairFrom:0,
@@ -336,7 +455,7 @@ function freshState(){
   };
 }
 
-const persistedKeys = ['authed','user','level','isBeginner','selfLevel','placeState','didFoundations','seenTour','darkMode','weekXp','weekKey','subscribed','plan','premium_until','pendingRef','xp','xpToday','xpDay','dailyGoal','goalMetDay','streak','lastActiveDay','streakFreezes','freezeUsedDay','longestStreak','repairFrom','wordsLearned','learnedWords','weakWords',
+const persistedKeys = ['authed','user','level','isBeginner','selfLevel','placeState','didFoundations','seenTour','darkMode','weekXp','weekKey','subscribed','plan','entitled','premium_until','pendingRef','xp','xpToday','xpDay','dailyGoal','goalMetDay','streak','lastActiveDay','streakFreezes','freezeUsedDay','longestStreak','repairFrom','wordsLearned','learnedWords','weakWords',
                        'hitMilestones','unlockedAchv',
                        'sections','words','fullQuizDone','unitDone','doneChapters','currentChapter','savedPosition','settings'];
 
@@ -414,6 +533,10 @@ const app = {
   },
   reset(){ Store.del(SAVE_KEY); this.state = freshState(); this.persist(); }
 };
+// Expose for the Supabase bridge so background fetches (leaderboard, referral
+// stats) can apply their patch without gating boot — see loadProgress() in
+// supabase-bridge.js (C1).
+try{ window.app = app; }catch(_){}
 
 // Sign out WITHOUT wiping cloud progress. The old path (app.reset()) left
 // _restored=true, so the chained persist() pushed EMPTY state to the cloud 1.5s
@@ -493,15 +616,22 @@ function toast(msg){
 
 /* ===================== AUDIO (client-side TTS, single source, guarded) ===================== */
 const Audio2 = {
-  speaking:null, _el:null,
+  speaking:null, _el:null, _token:0,
   supported(){ return typeof window!=='undefined' && 'speechSynthesis' in window; },
   stop(){
+    // Bump the token first so any in-flight clip-url/tts promise from a
+    // previous speak() call drops out before touching the <audio> element.
+    // M2: without this, tapping example button A then B (each kicks off an
+    // async clipUrl() lookup) could let A's late-resolving promise overwrite
+    // B's src — playing the wrong sentence for the tapped button.
+    this._token++;
     try{ if(this._el){ this._el.pause(); this._el.currentTime=0; } }catch(e){}
     try{ if(this.supported()) window.speechSynthesis.cancel(); }catch(e){}
     this.speaking=null;
   },
   speak(text, onend, rate){
     this.stop();
+    const myToken = ++this._token;                   // claim this call's slot
     const TB=(typeof window!=='undefined')&&window.TalaqaBackend;
     // Real, natural TTS via the backend when connected; browser voice otherwise.
     if(TB&&TB.enabled&&TB.tts){
@@ -509,9 +639,11 @@ const Audio2 = {
       const el=this._el||(this._el=new Audio());
       try{ el.preload='auto'; }catch(_){}
       let done=false;
-      const finish=()=>{ if(done)return; done=true; self.speaking=null; if(onend)onend(); };
+      const stale=()=>self._token!==myToken;          // a newer speak() invalidated us
+      const finish=()=>{ if(done)return; done=true; if(stale()) return; self.speaking=null; if(onend)onend(); };
       // Set src + play a url, calling onFail on any load/play error.
       const startPlay=(url, onFail)=>{
+        if(stale()) return;                           // a later speak() already won
         el.src=url;
         try{ el.playbackRate = rate||1; }catch(_){}   // slow/normal playback for the TTS clip
         el.onended=finish;
@@ -519,8 +651,8 @@ const Audio2 = {
         self.speaking=text;
         const p=el.play(); if(p&&p.catch) p.catch(onFail);
       };
-      const toSynth=()=>{ self.speaking=null; self._fallback(text,onend,rate); };           // last resort: browser voice
-      const generate=()=>{ TB.tts(text).then(u=>startPlay(u,toSynth)).catch(toSynth); };     // CDN miss: generate, then play
+      const toSynth=()=>{ if(stale()) return; self.speaking=null; self._fallback(text,onend,rate); };           // last resort: browser voice
+      const generate=()=>{ if(stale()) return; TB.tts(text).then(u=>startPlay(u,toSynth)).catch(toSynth); };     // CDN miss: generate, then play
       // FAST PATH: play the predicted CDN clip DIRECTLY — one round-trip, no blocking
       // HEAD pre-check, HTTP-cached after the first play (sub-second). Only if it 404s
       // do we generate it; only if that fails do we fall back to the browser voice.
@@ -534,7 +666,24 @@ const Audio2 = {
     if(!this.supported()){ if(onend) setTimeout(onend, 650); return; }
     try{
       const u=new SpeechSynthesisUtterance(text);
-      u.lang = /[؀-ۿ]/.test(text) ? 'ar' : 'en-US';   // pick an Arabic voice for Arabic text
+      const isAr = /[؀-ۿ]/.test(text);
+      u.lang = isAr ? 'ar' : 'en-US';                 // pick an Arabic voice for Arabic text
+      // H7: This path runs only when both the pre-generated CDN clip and the
+      // server TTS failed (network down, edge function 500, etc.). For English
+      // text we MUST have an English voice installed — many Saudi devices set
+      // to Arabic locale ship without one, in which case speechSynthesis would
+      // play the wrong-language voice or silently no-op. Warn the user once so
+      // they understand why an English-learning app suddenly has no audio.
+      try{
+        if(!isAr){
+          const voices = (window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || [];
+          const hasEn = voices.some(v=>/^en/i.test(v.lang||''));
+          if(!hasEn && !window._talaqaTtsWarned){
+            window._talaqaTtsWarned = true;
+            try{ if(typeof toast==='function') toast('ما لقينا صوت إنجليزي على جهازك — الصوت قد ما يشتغل. حاول تحدّث الإنترنت.'); }catch(_){}
+          }
+        }
+      }catch(_){}
       u.rate=rate||.92; u.pitch=1;
       u.onend=()=>{ this.speaking=null; if(onend)onend(); };
       u.onerror=()=>{ this.speaking=null; if(onend)onend(); };
@@ -716,6 +865,10 @@ function statusBar(color){
   // keeps breathing room in a normal browser tab where the inset is 0.
   return h('div',{ style:{ height:'max(env(safe-area-inset-top), 8px)', flexShrink:0 }});
 }
+// Surrogate-pair-safe first character for avatar initials. Plain `s[0]` on
+// emoji or other non-BMP starting chars returns half a surrogate pair and
+// renders the replacement glyph in the avatar bubble.
+function initialOf(name, fallback){ return (Array.from(String(name||'').trim())[0]) || (fallback||'؟'); }
 function avatar(opts){
   const size=opts.size||40;
   const base={ width:size+'px', height:size+'px', borderRadius:'50%', flexShrink:0, boxShadow:opts.ring||'none', overflow:'hidden' };
@@ -744,7 +897,7 @@ function nav(active){
 }
 function lessonTop(progress, label, onClose){
   return h('div',{ style:{ padding:'6px 16px 4px', display:'flex', alignItems:'center', gap:'12px', flexShrink:0 }},
-    h('button',{class:'press', onClick:onClose||back, 'aria-label':'رجوع', style:{ color:T.mut, display:'flex' }}, ico('chevR',{size:26, sw:2.6})),
+    h('button',{class:'press', onClick:onClose||back, 'aria-label':'رجوع', style:{ color:T.mut, display:'flex', alignItems:'center', justifyContent:'center', width:'44px', height:'44px', margin:'-9px -9px -9px 0' }}, ico('chevR',{size:26, sw:2.6})),
     h('div',{ style:{ flex:1, height:'14px', borderRadius:'99px', background:T.line, overflow:'hidden' }},
       h('div',{ style:{ height:'100%', width:clamp(progress*100,0,100)+'%', background:T.P, borderRadius:'99px', transition:'width .45s cubic-bezier(.2,.8,.2,1)' }})),
     h('div',{ style:{ fontSize:'12.5px', fontWeight:800, color:T.mut, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'42%' }}, label||''),
@@ -1293,11 +1446,23 @@ function loadChapter(ch){
   // must NOT wipe what you learned (that caused "learned a word but it says not
   // learned + restarts from lesson 1").
   if(app.state.currentChapter !== chapterKey(ch)){
+    const key = chapterKey(ch);
+    // H2: derive sections from the authoritative doneChapters. Jumping BACK to
+    // a finished chapter (Journey "إعادة", re-tap in Unit Hub) previously reset
+    // sections to fresh while doneChapters[key] stayed true — so Home showed
+    // 0/5 while Journey + Hub showed مراجعة. Seed every section as 'done' for
+    // already-finished chapters; fresh start otherwise.
+    const wasDone = !!(app.state.doneChapters||{})[key];
     app.set({
-      sections:{ words:'current', listening:'locked', reading:'locked', conversation:'locked', grammar:'locked', writing:'locked' },
-      words:[0,1,2,3,4].map(()=>({ teach:false, spell:false, pron:false, mean:false })),
-      fullQuizDone:false, unitDone:false,
-      currentChapter: chapterKey(ch),
+      sections: wasDone
+        ? { words:'done', listening:'done', reading:'done', conversation:'done', grammar:'done', writing:'done' }
+        : { words:'current', listening:'locked', reading:'locked', conversation:'locked', grammar:'locked', writing:'locked' },
+      words: wasDone
+        ? [0,1,2,3,4].map(()=>({ teach:true, spell:true, pron:true, mean:true }))
+        : [0,1,2,3,4].map(()=>({ teach:false, spell:false, pron:false, mean:false })),
+      fullQuizDone: wasDone,
+      unitDone: wasDone,
+      currentChapter: key,
     });
   }
   generateChapterExamples(ch);   // FAST per-word examples (~4s) — show words quickly
@@ -1799,7 +1964,7 @@ function wordPlayCard(word){
 /* onboarding top bar */
 function obTop(step, total){
   return h('div',{style:{ padding:'8px 16px 2px', display:'flex', alignItems:'center', gap:'12px', flexShrink:0 }},
-    h('button',{class:'press', onClick:back, 'aria-label':'رجوع', style:{ color:T.mut, display:'flex' }}, ico('chevR',{size:26, sw:2.4})),
+    h('button',{class:'press', onClick:back, 'aria-label':'رجوع', style:{ color:T.mut, display:'flex', alignItems:'center', justifyContent:'center', width:'44px', height:'44px', margin:'-9px -9px -9px 0' }}, ico('chevR',{size:26, sw:2.4})),
     h('div',{style:{ flex:1, display:'flex', gap:'6px' }},
       ...Array.from({length:total},(_,i)=>h('div',{style:{ flex:1, height:'7px', borderRadius:'99px',
         background:i<step?T.P:T.line, transition:'background .3s' }}))));
@@ -1965,15 +2130,51 @@ SCREENS.auth = (s)=>{
   // falling back to the live DOM field only if state hasn't caught up yet.
   // Read the phone straight from the VISIBLE field at submit time (ground truth),
   // falling back to the silently-tracked state. Avoids any re-render race.
-  const e164 = ()=>{ const el=(typeof document!=='undefined')&&document.getElementById('f_phone'); const raw=(el&&el.value)?el.value:(s.ui.phoneNum||''); const num=String(raw).replace(/[^0-9]/g,'').replace(/^0+/,''); return (s.ui.cc||'+966')+num; };
+  // Build E.164 from the country code + the phone-number input. Robust against
+  // users who already typed +966 / 00966 / 966 in the field (an extremely common
+  // habit — without stripping it we'd build "+966966..." and Twilio would never
+  // deliver the SMS). H1 in the audit.
+  const e164 = ()=>{
+    const el=(typeof document!=='undefined')&&document.getElementById('f_phone');
+    const raw=(el&&el.value)?el.value:(s.ui.phoneNum||'');
+    const cc = (s.ui.cc||'+966');
+    const ccDigits = cc.replace(/[^0-9]/g,'');
+    let num = String(raw).replace(/[^0-9]/g,'');
+    if(num.startsWith('00')) num = num.slice(2);                // international dialing prefix
+    if(ccDigits && num.startsWith(ccDigits)) num = num.slice(ccDigits.length); // double-cc
+    num = num.replace(/^0+/,'');                                 // national-style leading 0
+    return cc + num;
+  };
 
   // --- PHONE STEP: send the SMS code -----------------------------------------
   const sendCode = async ()=>{
     const TB=(typeof window!=='undefined') && window.TalaqaBackend;
     // When re-sending from the code step we already have authPhone; otherwise read the field.
     const phone = (codeStep && s.ui.authPhone) ? s.ui.authPhone : e164();
-    const digits = phone.replace(/[^0-9]/g,'').slice((s.ui.cc||'+966').replace(/[^0-9]/g,'').length);
-    if(!/^5\d{8}$/.test(digits)){ toast('أدخل رقم جوال سعودي صحيح — يبدأ بـ ٥ و٩ أرقام'); return; }
+    const ccDigits = (s.ui.cc||'+966').replace(/[^0-9]/g,'');
+    const digits = phone.replace(/[^0-9]/g,'').slice(ccDigits.length);
+    // Saudi mobile: enforce ^5\d{8}$ client-side. A malformed Saudi number costs
+    // a real SMS attempt that never arrives — too important to leave to Twilio.
+    // Non-SA: keep a broad E.164 6–14 sanity check; the per-country format lives
+    // at Supabase / Twilio.
+    const isSA = (s.ui.cc==='+966') || (s.ui.ccISO==='SA');
+    // M8: inline persistent error in addition to the toast. The toast vanishes
+    // in ~1s and is easy to miss on mobile; the inline message stays under the
+    // field until the input becomes valid (cleared by the onInput handler).
+    if(isSA){
+      if(!/^5\d{8}$/.test(digits)){
+        const msg='رقم الجوال يبدأ بـ 5 ويتكوّن من 9 أرقام';
+        app.setUI({ phoneErr: msg });
+        toast(msg);
+        return;
+      }
+    } else if(digits.length<6 || digits.length>14){
+      const msg='أدخل رقم جوال صحيح';
+      app.setUI({ phoneErr: msg });
+      toast(msg);
+      return;
+    }
+    if(s.ui.phoneErr) app.setUI({ phoneErr: null });
     if(!(TB && TB.enabled && TB.sendPhoneOtp)){
       // offline / demo: skip straight to the code step (any code works there)
       app.setUI({ authStep:'code', authPhone:phone, otpCode:'' });
@@ -1984,12 +2185,13 @@ SCREENS.auth = (s)=>{
     try{
       await TB.sendPhoneOtp(phone);
       app.setUI({ authStep:'code', authPhone:phone, authBusy:false, otpCode:'' });
-      toast('أرسلنا رمز التحقق إلى '+phone+' ✉️');
+      // U+2066 (LRI) / U+2069 (PDI) isolate the LTR phone number from the
+      // surrounding Arabic so leading "+" and digits don't get bidi-reordered.
+      toast('أرسلنا رمز التحقق إلى ⁦'+phone+'⁩ ✉️');
     }catch(err){
       app.setUI({ authBusy:false });
       try{ console.error('[otp-send]', err); }catch(_){}
-      const _dbg=(err&&(err.error_code||err.code||err.status||err.name))||((err&&err.message)||'').slice(0,48)||'?';
-      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نرسل الرمز')+' ·[S:'+_dbg+']');
+      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نرسل الرمز'));
     }
   };
 
@@ -2009,19 +2211,39 @@ SCREENS.auth = (s)=>{
     app.setUI({ authBusy:true });
     try{
       await TB.verifyPhoneOtp(phone, code);
-      let patch=null; try{ patch=await TB.loadProgress(); }catch(_){}
+      // CRITICAL: do NOT mark _restored or route as a new user on a transient
+      // loadProgress failure. The previous shape (try/catch swallowing the
+      // error, then app._restored=true and isNew=true) would route a returning
+      // user to onboarding and let the next autosave clobber their real cloud
+      // progress with an empty blob. Now: if loadProgress THROWS we surface
+      // a retry toast and let the user try again — same defense as the boot
+      // path. Only on a successful load do we mark _restored and route.
+      let patch;
+      try{ patch = await TB.loadProgress(); }
+      catch(loadErr){
+        app.setUI({ authBusy:false });
+        try{ console.error('[otp-verify:load]', loadErr); }catch(_){}
+        toast('تعذّر تحميل تقدمك، حاول مرة ثانية');
+        return;
+      }
       app._restored = true;
       app.set(Object.assign({ authed:true }, patch||{}, { user:Object.assign({}, app.state.user, (patch&&patch.user)||{}, { phone }) }));
-      const isNew = !(patch && patch.level);
+      // Server-authoritative isNew. Prefer profiles.onboarding_completed
+      // (set by complete_onboarding RPC); fall back to the legacy heuristic
+      // only if the server flag is absent (older profiles, offline path).
+      const isNew = (patch && typeof patch._serverOnboardingCompleted === 'boolean')
+        ? !patch._serverOnboardingCompleted
+        : !(patch && patch.level);
       // Referral: link a brand-new user to their inviter (best-effort), then consume the code.
+      // Server-side claim_referral has its own new-user gate (0020) so a stale
+      // client guess can no longer hijack the referrer's link.
       try{ const pend=app.state.pendingRef; if(isNew && pend && TB.claimReferral){ TB.claimReferral(pend); } if(pend) app.set({ pendingRef:'' }); }catch(_){}
       if(isNew){ go('taste',{},{resetStack:true}); }   // brand-new -> first-word wow -> onboarding (collects name)
       else { if(typeof restoreCurrentChapter==='function') restoreCurrentChapter(); go('home',{},{resetStack:true}); }
     }catch(err){
       app.setUI({ authBusy:false });
       try{ console.error('[otp-verify]', err); }catch(_){}
-      const _dbg=(err&&(err.error_code||err.code||err.status||err.name))||((err&&err.message)||'').slice(0,48)||'?';
-      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نتحقق')+' ·[V:'+_dbg+']');
+      toast(((TB.friendlyError&&TB.friendlyError(err))||'ما قدرنا نتحقق'));
     }
   };
 
@@ -2045,12 +2267,18 @@ SCREENS.auth = (s)=>{
     flagImg(ccObj.i, {w:26, h:18}),
     h('span',{ class:'en', style:{ fontWeight:800, fontSize:'16px', color:T.ink } }, ccObj.d),
     ico('chevD',{ size:15, sw:2.5, color:T.mut }));
-  const phoneBody = h('div',{style:{ display:'flex', flexDirection:'column', gap:'12px','--i':1 }},
+  const phoneBody = h('div',{style:{ display:'flex', flexDirection:'column', gap:'8px','--i':1 }},
     h('div',{style:{ display:'flex', gap:'8px', direction:'ltr' }},
       ccTrigger,
       h('input',{ id:'f_phone', type:'tel', inputmode:'numeric', class:'field en', dir:'ltr', placeholder:'5XXXXXXXX',
-        value:s.ui.phoneNum||'', onInput:(e)=>{ app.state.ui.phoneNum=String(e.target.value||'').replace(/[^0-9]/g,''); },
-        style:{ flex:1, textAlign:'left' } })));
+        value:s.ui.phoneNum||'',
+        // M8: clear the inline error as soon as the user starts editing again
+        // so the message disappears the moment they correct the input.
+        onInput:(e)=>{ app.state.ui.phoneNum=String(e.target.value||'').replace(/[^0-9]/g,''); if(app.state.ui.phoneErr){ app.state.ui.phoneErr=null; if(app.notify) app.notify(); } },
+        style:{ flex:1, textAlign:'left' } })),
+    // M8: persistent inline error under the field — survives the 1s toast so
+    // mobile users who looked away still see what went wrong.
+    s.ui.phoneErr ? h('div',{style:{ fontSize:'12.5px', color:T.bad, fontWeight:800, textAlign:'start', paddingInlineStart:'4px' }}, s.ui.phoneErr) : null);
 
   // CODE STEP body: a single big 6-digit field + change-number / resend links
   const codeBody = h('div',{style:{ display:'flex', flexDirection:'column', gap:'14px','--i':1 }},
@@ -2127,7 +2355,7 @@ SCREENS.onboard_welcome = (s)=> frame(
   body({pad:'18px 24px 0'},
     h('div',{style:{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', textAlign:'center', gap:'10px' }},
       emojiBadge('👋', { size:106, bg:T.Ptint, edge:'#d7def7' }),
-      h('div',{style:{ fontSize:'26px', fontWeight:900 }}, `أهلاً ${s.user.name||''}!`),
+      h('div',{style:{ fontSize:'26px', fontWeight:900 }}, s.user.name ? `أهلاً ${s.user.name}!` : 'أهلاً بك!'),
       h('div',{style:{ fontSize:'15px', color:T.mut, fontWeight:600, lineHeight:1.7, maxWidth:'300px' }},
         'راح نسأل أسئلة سريعة عشان نُخصّص رحلتك بالإنجليزية حسب هدفك ومستواك.'))),
   footer(bigBtn('يلا نبدأ', { onClick:()=>go('onboard_name'), icon:'arrowL' }))
@@ -2140,7 +2368,13 @@ SCREENS.onboard_name = (s)=> frame(
   footer(bigBtn('كمّل', { icon:'arrowL', onClick:()=>{
     const v=(document.getElementById('ob_name')||{}).value;
     if(!v||!v.trim()){ toast('اكتب اسمك أول'); return; }
-    app.set({ user:Object.assign({}, s.user, { name:v.trim() }) }); go('onboard_age');
+    const nm=v.trim();
+    app.set({ user:Object.assign({}, s.user, { name:nm }) });
+    // Persist the name to the server immediately. Closes the abandonment
+    // window between this screen and finishSetup (where complete_onboarding
+    // would otherwise be the first write of profiles.display_name).
+    try{ const TB=(typeof window!=='undefined')&&window.TalaqaBackend; if(TB&&TB.saveDisplayName){ TB.saveDisplayName(nm); } }catch(_){}
+    go('onboard_age');
   }}))
 );
 SCREENS.onboard_age = (s)=>{
@@ -2492,13 +2726,36 @@ function startWords(){
 }
 function launchSection(id){
   markPosition('unit_hub',{});
-  // if a real chapter is loaded but its lesson wasn't regenerated yet (e.g. after reload), kick it off
-  if(typeof ensureCurrentLesson==='function') ensureCurrentLesson();
-  if(id==='words') startWords();
-  else if(id==='listening') go('listen_clip',{i:0});
-  else if(id==='reading') go('reading',{i:0});
-  else if(id==='conversation') go('convo_intro');
-  else if(id==='grammar') go('grammar_lesson');
+  // Free-tier daily-section gate (migration 0020). Native + IAP-enabled only —
+  // web stays unrestricted until/unless we wire a web billing path. Paid users
+  // get a server free-pass via is_entitled(). On a server glitch the RPC
+  // returns null and we let the user through (fail-open on the web; native has
+  // its own offline behavior).
+  const _open = ()=>{
+    if(typeof ensureCurrentLesson==='function') ensureCurrentLesson();
+    if(id==='words') startWords();
+    else if(id==='listening') go('listen_clip',{i:0});
+    else if(id==='reading') go('reading',{i:0});
+    else if(id==='conversation') go('convo_intro');
+    else if(id==='grammar') go('grammar_lesson');
+  };
+  try{
+    const _iapOn = (typeof IAP!=='undefined') && IAP.available && IAP.available();
+    const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+    if(!_iapOn || !TB || !TB.enabled || typeof TB.consumeDailySection!=='function' || !app.state.authed){
+      _open(); return;
+    }
+    // Already known-entitled in this session? Skip the round-trip.
+    if(app.state.entitled){ _open(); return; }
+    Promise.resolve(TB.consumeDailySection()).then(r=>{
+      if(!r){ _open(); return; }                          // transport blip: don't block
+      if(r.entitled){ if(!app.state.entitled) app.set({entitled:true}); _open(); return; }
+      if(r.allowed){ _open(); return; }
+      // Daily limit hit — route to paywall with the "tomorrow OR subscribe" UX.
+      app.setUI({ paywallReason:'daily_limit' });
+      go('paywall');
+    }).catch(()=>{ _open(); });
+  }catch(_){ _open(); }
 }
 /* today's calendar day as a stable string key. Pure Date logic — runs under Node too. */
 function dayStr(){ return new Date().toDateString(); }
@@ -2836,7 +3093,7 @@ SCREENS.home = (s)=>{
           h('span',{class:'num', style:{ fontSize:'15px', lineHeight:1 }}, ar(s.streak)),
           h('span',{style:{ fontSize:'10px', opacity:.92, fontWeight:800 }},'يوم')),
         h('button',{class:'press', onClick:()=>go('profile'), 'aria-label':'ملفي', style:{ borderRadius:'50%' }},
-          avatar({ photo:s.user.photo, initial:(s.user.name||'ص')[0], size:42, ring:`0 6px 0 ${T.PD}` }))),
+          avatar({ photo:s.user.photo, initial:initialOf(s.user.name,'ص'), size:42, ring:`0 6px 0 ${T.PD}` }))),
       // one-tap streak repair (only when a streak was just lost)
       repairCard(s, cont),
       // هدف اليوم — daily goal ring hero
@@ -2992,9 +3249,9 @@ function leaderboardCard(s){
     // REAL users only (no fake names). If you're the only one yet, show just you.
     rows = (TB.leaderboardCache && TB.leaderboardCache.length)
       ? TB.leaderboardCache
-      : [{ rank:1, name:s.user.name||'أنت', initial:(s.user.name||'أ')[0], pts:s.xp||0, me:true }];
+      : [{ rank:1, name:s.user.name||'أنت', initial:initialOf(s.user.name,'أ'), pts:s.xp||0, me:true }];
   } else {
-    const me={ rank:5, name:s.user.name||'أنت', initial:(s.user.name||'أ')[0], pts:s.xp, me:true };
+    const me={ rank:5, name:s.user.name||'أنت', initial:initialOf(s.user.name,'أ'), pts:s.xp, me:true };
     rows=LEADERBOARD.concat([me]);          // offline demo fallback only
   }
   if(!rows || !rows.length){
@@ -3009,7 +3266,11 @@ function leaderboardCard(s){
         top3 ? h('span',{style:{ width:'30px', display:'flex', justifyContent:'center' }}, medal(r.rank, 30))
              : h('span',{class:'num', style:{ width:'30px', textAlign:'center', color:r.me?T.P:T.faint, fontSize:'15px' }}, ar(r.rank)),
         avatar({ photo:(r.me ? (s.user.photo||r.avatar) : r.avatar)||null, initial:r.initial, size:34, bg:r.me?T.P:`hsl(${r.hue||220} 70% 60%)` }),
-        h('div',{style:{ flex:1, fontWeight:800, fontSize:'15px', color:r.me?T.PD:T.ink }}, r.name + (r.me?' (أنت)':'')),
+        h('div',{style:{ flex:1, fontWeight:800, fontSize:'15px', color:r.me?T.PD:T.ink }},
+          // bdi isolates the (possibly Latin) display name from the surrounding
+          // RTL paragraph so the " (أنت)" suffix always sits to the LEFT of the
+          // name in the RTL flow, not jammed against punctuation.
+          h('bdi', null, r.name), r.me?' (أنت)':''),
         h('div',{class:'num', style:{ fontSize:'15px', color:r.me?T.P:T.mut }}, ar(r.pts)));
     }));
 }
@@ -3210,10 +3471,10 @@ SCREENS.settings = (s)=>{
       // account
       card({ style:{'--i':1} },
         h('div',{style:{ display:'flex', alignItems:'center', gap:'13px' }},
-          avatar({ photo:s.user.photo, initial:(s.user.name||'ص')[0], size:54, ring:`0 5px 0 ${T.PD}` }),
+          avatar({ photo:s.user.photo, initial:initialOf(s.user.name,'ص'), size:54, ring:`0 5px 0 ${T.PD}` }),
           h('div',{style:{ flex:1 }},
             h('div',{style:{ fontSize:'18px', fontWeight:900 }}, s.user.name||'صديقي'),
-            h('div',{class:'en', style:{ fontSize:'13px', color:T.mut, direction:'ltr', textAlign:'left' }}, s.user.email||'—'),
+            h('div',{class:'en', style:{ fontSize:'13px', color:T.mut, direction:'ltr', textAlign:'left' }}, s.user.phone||s.user.email||'—'),
             h('div',{style:{ fontSize:'12px', color:T.P, fontWeight:800, marginTop:'2px' }}, s.isBeginner?'المستوى: مبتدئ':('المستوى: '+(s.level||'A1')) )),
           h('button',{class:'press', onClick:()=>go('profile'), style:{ color:T.P }}, ico('edit',{size:20})))),
       // subscription
@@ -3312,14 +3573,22 @@ function divider(){ return h('div',{style:{ height:'1.5px', background:T.line, m
 
 /* ===================== SUBSCRIPTION ===================== */
 const PLANS = {
-  yearly:  { id:'yearly',  ar:'سنوي',   price:399, per:'سنة',    tag:'أفضل عرض' },
-  monthly: { id:'monthly', ar:'شهري',   price:49,  per:'شهر',    tag:'الخيار الشهير' },
-  weekly:  { id:'weekly',  ar:'أسبوعي', price:29,  per:'أسبوع',  tag:null },
+  yearly:  { id:'yearly',  ar:'سنوي',   price:399.99, per:'سنة',    tag:'أفضل عرض' },
+  monthly: { id:'monthly', ar:'شهري',   price:49.99,  per:'شهر',    tag:'الخيار الشهير' },
+  weekly:  { id:'weekly',  ar:'أسبوعي', price:29.99,  per:'أسبوع',  tag:null },
 };
-/* Premium entitlement = a paid `subscribed` flag OR an active referral-earned
-   `premium_until` (server-authoritative). Gating reads go through isSubbed(). */
+/* Premium entitlement — SERVER is the single source of truth (H6).
+     1) s.entitled    — SERVER-AUTHORITATIVE is_entitled() RPC (migration 0020).
+                        Refreshed on boot/auth/purchase/visibility-resume.
+     2) premium_until — referral-earned months (server reconciles this into
+                        is_entitled too; kept for offline UX before the
+                        round-trip completes).
+   s.subscribed (legacy client-only flag) is now COSMETIC ONLY — it never
+   gates content or drives the "active premium" UI by itself, because the
+   audit observed states where it was true while the server said
+   entitled=false / premium_until=null and Settings still showed "مفعل". */
 function premiumActive(s){ s=s||app.state; const v=s&&s.premium_until; let t=0; if(typeof v==='number') t=v; else if(typeof v==='string'&&v) t=Date.parse(v); return !!t && !isNaN(t) && Date.now()<t; }
-function isSubbed(s){ s=s||app.state; return !!(s&&s.subscribed) || premiumActive(s); }
+function isSubbed(s){ s=s||app.state; return !!(s&&s.entitled) || premiumActive(s); }
 const SUB_FEATURES = [
   { icon:'map',  t:'كل الدروس والمستويات', d:'من A1 إلى C1 — بدون حدود' },
   { icon:'chat', t:'محادثات بلا حد مع مايا', d:'مارس النطق في أي وقت' },
@@ -3328,7 +3597,11 @@ const SUB_FEATURES = [
   { icon:'bell', t:'دعم متقدم', d:'نساعدك قدام في أي سؤال' },
 ];
 function subscriptionCard(s){
-  if(s.subscribed || premiumActive(s)){
+  // H6: show the premium-active card only when the SERVER says so
+  // (s.entitled from is_entitled RPC, or a live premium_until). Never
+  // promote the local `subscribed` flag to "مفعل" on its own — that
+  // flag survived expirations and made Settings lie.
+  if(s.entitled || premiumActive(s)){
     const viaRef = !s.subscribed;   // premium with no paid plan -> earned via referrals
     const p=PLANS[s.plan]||PLANS.monthly;
     let untilStr=''; try{ if(s.premium_until) untilStr=new Date(s.premium_until).toLocaleDateString('ar-EG',{year:'numeric',month:'long',day:'numeric'}); }catch(_){}
@@ -3412,6 +3685,44 @@ function referralCard(s){
 }
 SCREENS.paywall = (s)=>{
   const chosen = s.ui.plan || 'monthly';
+  const reason = s.ui.paywallReason || '';                // 'daily_limit' when free user hit 1/day
+  const iapOn = (typeof IAP!=='undefined') && IAP.available && IAP.available();
+
+  /* Lazy-fetch RevenueCat offerings on first paywall render. Prices are read
+     from the offering when present; we fall back to PLANS constants otherwise
+     (web, or native before the first offering fetch lands). */
+  const offering = s.ui.iapOffering || null;
+  if(iapOn && !offering && !s.ui.iapOfferingBusy){
+    app.setUI({ iapOfferingBusy:true, iapOfferingError:'' });
+    Promise.resolve(IAP.getOfferings()).then(o=>{
+      const ok = o && Array.isArray(o.availablePackages) && o.availablePackages.length;
+      app.setUI({
+        iapOffering: o||null,
+        iapOfferingBusy: false,
+        iapOfferingError: ok ? '' : (window.__iapLastError || 'لم نستلم الباقات من متجر آبل')
+      });
+    }).catch(e=>{
+      app.setUI({ iapOfferingBusy:false, iapOfferingError: String((e&&e.message)||e||'فشل تحميل الباقات') });
+    });
+  }
+  /* Build a PLANS-like view for each plan key. When the RevenueCat package is
+     available we use ITS localized price (string) — never hardcoded. */
+  const planView = (key)=>{
+    const base = PLANS[key] || PLANS.monthly;
+    let priceStr = ar(base.price)+' ريال';
+    let pkg = null;
+    if(offering && Array.isArray(offering.availablePackages)){
+      for(const p of offering.availablePackages){
+        if(IAP.planKeyFor(p) === key){
+          pkg = p;
+          const ps = p.product && (p.product.priceString || p.product.price_string);
+          if(ps) priceStr = String(ps);
+          break;
+        }
+      }
+    }
+    return Object.assign({}, base, { _priceStr: priceStr, _pkg: pkg });
+  };
   const planCard=(p)=>{ const on=chosen===p.id;
     return h('button',{class:'press', onClick:()=>app.setUI({plan:p.id}), style:{ width:'100%', textAlign:'start', display:'flex', alignItems:'center', gap:'12px',
       background: on?T.Psoft:'#fff', border:`2.5px solid ${on?T.P:T.line}`, borderRadius:'18px', padding:'15px', boxShadow: on?`0 5px 0 ${T.P}`:`0 5px 0 ${T.edge}`, position:'relative' }},
@@ -3420,19 +3731,93 @@ SCREENS.paywall = (s)=>{
         h('div',{style:{ fontSize:'17px', fontWeight:900 }}, 'باقة '+p.ar),
         h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }}, p.id==='monthly'?'يتجدد كل شهر':p.id==='yearly'?'يتجدد كل سنة • وفّر ~٣٢٪':'يتجدد كل أسبوع')),
       h('div',{style:{ textAlign:'center', flexShrink:0 }},
-        h('div',null, h('span',{class:'num', style:{ fontSize:'24px', color:T.PD }}, ar(p.price)), h('span',{style:{ fontSize:'12px', color:T.mut, fontWeight:800 }},' ريال')),
+        h('div',null, h('span',{class:'num', style:{ fontSize:'22px', color:T.PD }}, p._priceStr)),
         h('div',{style:{ fontSize:'11px', color:T.faint, fontWeight:800 }},'/'+p.per)),
       p.tag ? h('span',{style:{ position:'absolute', top:'-11px', insetInlineEnd:'14px', background:T.Y, color:'#5c4a00', fontSize:'10.5px', fontWeight:900, padding:'3px 9px', borderRadius:'99px' }}, p.tag) : null);
   };
-  const subscribe=()=>{ app.set({ subscribed:true, plan:chosen }); go('sub_success',{},{resetStack:true}); };
+
+  const planMonthly = planView('monthly');
+  const planYearly  = planView('yearly');
+  const planWeekly  = planView('weekly');
+  const chosenView  = chosen==='yearly' ? planYearly : chosen==='weekly' ? planWeekly : planMonthly;
+
+  const subscribe=async ()=>{
+    if(!iapOn){
+      // Web / no key yet — keep the legacy fake-subscribe so the flow is still
+      // demoable. The native binary always has iapOn=true once the key is set.
+      app.set({ subscribed:true, plan:chosen, entitled:true });
+      go('sub_success',{},{resetStack:true});
+      return;
+    }
+    let pkg = chosenView._pkg;
+    // No package yet? Force a fresh configure + offerings fetch BEFORE giving up.
+    // Recovers from a transient native hiccup (slow boot, sandbox propagation,
+    // network blip mid-getOfferings) without making the user leave the screen.
+    if(!pkg){
+      if(app._iapBusy) return; app._iapBusy=true;
+      app.setUI({ iapOfferingBusy:true });
+      try{
+        const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+        const uid = (TB && TB._user && TB._user.id) || null;
+        await IAP.configure(uid);
+        const fresh = await IAP.getOfferings(true);
+        const okFresh = fresh && Array.isArray(fresh.availablePackages) && fresh.availablePackages.length;
+        app.setUI({ iapOffering: fresh||null, iapOfferingBusy:false, iapOfferingError: okFresh?'':(window.__iapLastError||'لم نستلم الباقات من متجر آبل') });
+        if(okFresh){
+          for(const p of fresh.availablePackages){
+            if(IAP.planKeyFor(p) === chosen){ pkg = p; break; }
+          }
+        }
+      }catch(e){
+        app.setUI({ iapOfferingBusy:false, iapOfferingError: String((e&&e.message)||e||'فشل تحميل الباقات') });
+      }
+      app._iapBusy=false;
+      if(!pkg){
+        toast('تعذر الاتصال بمتجر آبل — تأكد من تسجيل الدخول بحساب آبل ثم حاول مرة ثانية');
+        return;
+      }
+    }
+    if(app._iapBusy) return; app._iapBusy=true;
+    Promise.resolve(IAP.purchasePackage(pkg)).then(()=>{
+      // Optimistic flip; the RevenueCat webhook will reconcile within seconds.
+      app.set({ entitled:true, plan:chosen });
+      try{ IAP.refreshEntitlementFromServer(); }catch(_){}
+      app._iapBusy=false;
+      go('sub_success',{},{resetStack:true});
+    }).catch(err=>{
+      app._iapBusy=false;
+      // Apple/RevenueCat cancellation = userCancelled — don't toast an error for it.
+      const msg=String((err&&err.message)||err||'');
+      if(/cancel|userCancelled|1\b/i.test(msg)) return;
+      try{ console.error('[IAP] purchase failed:', err); }catch(_){}
+      toast('تعذر إتمام الشراء — حاول مرة ثانية');
+    });
+  };
+
+  const restore=()=>{
+    if(!iapOn) return;
+    if(app._iapBusy) return; app._iapBusy=true;
+    Promise.resolve(IAP.restorePurchases()).then(()=>{
+      try{ IAP.refreshEntitlementFromServer(); }catch(_){}
+      app._iapBusy=false;
+      // After the server refreshes, isSubbed() will reflect reality on the next render.
+      toast('استعدنا مشترياتك ✓');
+    }).catch(()=>{ app._iapBusy=false; toast('تعذرت الاستعادة'); });
+  };
+
+  const headTitle = reason==='daily_limit' ? 'خلصت درس اليوم' : 'افتح كل الدروس';
+  const headSub   = reason==='daily_limit'
+    ? 'في الباقة المجانية تقدر تفتح درس واحد كل يوم. ارجع بكرة أو اشترك واستمر بدون توقف.'
+    : 'كل اللي تحتاجه للطلاقة';
+
   return frame(
     statusBar(),
-    lessonTop(0, 'طلاقة بريميوم', ()=>back()),
+    lessonTop(0, 'طلاقة بريميوم', ()=>{ try{ app.setUI({ paywallReason:'' }); }catch(_){} back(); }),
     body({pad:'8px 20px 0'},
       h('div',{style:{ textAlign:'center','--i':0 }},
         h('div',{class:'pop', style:{ width:'82px', height:'82px', borderRadius:'24px', background:`linear-gradient(135deg,${T.P},${T.PD})`, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', margin:'2px auto 0', boxShadow:`0 8px 0 ${T.PD}` }}, starBadge(46)),
-        h('div',{style:{ fontSize:'23px', fontWeight:900, marginTop:'11px' }},'افتح كل الدروس'),
-        h('div',{style:{ fontSize:'13.5px', color:T.mut, fontWeight:700, marginTop:'2px' }},'كل اللي تحتاجه للطلاقة')),
+        h('div',{style:{ fontSize:'23px', fontWeight:900, marginTop:'11px' }}, headTitle),
+        h('div',{style:{ fontSize:'13.5px', color:T.mut, fontWeight:700, marginTop:'2px', maxWidth:'320px', margin:'2px auto 0', lineHeight:1.6 }}, headSub)),
       card({ p:14, style:{ marginTop:'14px','--i':1 }},
         h('div',{style:{ fontSize:'13px', fontWeight:900, color:T.PD, marginBottom:'11px' }},'وش اللي بتفتح مع بريميوم؟'),
         h('div',{style:{ display:'flex', flexDirection:'column', gap:'11px' }},
@@ -3442,10 +3827,32 @@ SCREENS.paywall = (s)=>{
               h('div',{style:{ fontSize:'14px', fontWeight:900 }}, f.t),
               h('div',{style:{ fontSize:'11.5px', color:T.mut, fontWeight:600 }}, f.d)))))),
       h('div',{style:{ display:'flex', flexDirection:'column', gap:'16px', marginTop:'20px','--i':2 }},
-        planCard(PLANS.monthly), planCard(PLANS.yearly), planCard(PLANS.weekly)),
-      h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, textAlign:'center', marginTop:'12px', lineHeight:1.6,'--i':3 }},
-        'الدفع تجريبي الحين (واجهة فقط) وبنربطه بمحفظة لاحقاً — ما بنطلب بيانات بطاقة.')),
-    footer(bigBtn('اشترك الحين — '+ar(PLANS[chosen].price)+' ريال/'+PLANS[chosen].per, { icon:'arrowL', onClick:subscribe }))
+        planCard(planMonthly), planCard(planYearly), planCard(planWeekly)),
+      (iapOn && !s.ui.iapOfferingBusy && (!offering || !offering.availablePackages || !offering.availablePackages.length))
+        ? card({ p:14, style:{ marginTop:'14px', background:'#FFF4E5', borderColor:'#F5C77A','--i':2 }},
+            h('div',{style:{ fontSize:'13.5px', fontWeight:900, color:'#8a5400', marginBottom:'6px' }}, 'تعذر تحميل أسعار الاشتراك من آبل'),
+            h('div',{style:{ fontSize:'12px', color:'#6b4300', fontWeight:600, lineHeight:1.7 }},
+              'تأكد إنك مسجّل دخول بحساب آبل (Sandbox Tester للتجربة) من Settings ← App Store، ثم اضغط إعادة المحاولة. لو استمرت المشكلة، أعد فتح التطبيق.'),
+            h('button',{class:'press', onClick:async ()=>{
+                app.setUI({ iapOfferingBusy:true, iapOfferingError:'' });
+                try{
+                  const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+                  const uid = (TB && TB._user && TB._user.id) || null;
+                  await IAP.configure(uid);
+                  const fresh = await IAP.getOfferings(true);
+                  const okFresh = fresh && Array.isArray(fresh.availablePackages) && fresh.availablePackages.length;
+                  app.setUI({ iapOffering: fresh||null, iapOfferingBusy:false, iapOfferingError: okFresh?'':(window.__iapLastError||'لم نستلم الباقات من متجر آبل') });
+                }catch(e){ app.setUI({ iapOfferingBusy:false, iapOfferingError: String((e&&e.message)||e) }); }
+              }, style:{ marginTop:'10px', background:T.P, color:'#fff', fontWeight:900, fontSize:'13px', padding:'10px 16px', borderRadius:'12px', boxShadow:`0 4px 0 ${T.PD}` }}, 'إعادة المحاولة'))
+        : null,
+      iapOn
+        ? h('div',{style:{ textAlign:'center', marginTop:'14px','--i':3 }},
+            h('button',{class:'press', onClick:restore, style:{ background:'transparent', color:T.P, fontWeight:800, fontSize:'13px', padding:'6px 10px' }},'استعادة المشتريات'),
+            h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, marginTop:'8px', lineHeight:1.7 }},
+              'تجربة مجانية ٣ أيام، بعدها يتجدد الاشتراك تلقائياً من حساب آبل. تقدر تلغيه في أي وقت من إعدادات الآي‌كلاود.'))
+        : h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, textAlign:'center', marginTop:'12px', lineHeight:1.6,'--i':3 }},
+            'الدفع متاح الحين في تطبيق آيفون فقط. على الويب الباقات للعرض.')),
+    footer(bigBtn('اشترك الحين — '+chosenView._priceStr+'/'+chosenView.per, { icon:'arrowL', onClick:subscribe }))
   );
 };
 
@@ -3640,7 +4047,7 @@ SCREENS.profile = (s)=>{
     body({pad:'14px 20px 0', gap:'16px'},
       // identity header
       h('div',{style:{ display:'flex', flexDirection:'column', alignItems:'center', gap:'10px', marginTop:'4px','--i':0 }},
-        avatar({ photo:s.user.photo||'', initial:(s.user.name||'ص')[0], size:104, ring:`0 7px 0 ${T.PD}` }),
+        avatar({ photo:s.user.photo||'', initial:initialOf(s.user.name,'ص'), size:104, ring:`0 7px 0 ${T.PD}` }),
         h('div',{style:{ fontSize:'22px', fontWeight:900, color:T.ink }}, s.user.name||'صديقي'),
         h('div',{style:{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center' }},
           h('span',{style:{ background:T.Psoft, color:T.PD, fontWeight:900, fontSize:'12.5px', padding:'6px 13px', borderRadius:'99px' }}, titleFor(s)),
@@ -3686,7 +4093,18 @@ SCREENS.profile_edit = (s)=>{
       img.src=rd.result; };
     rd.readAsDataURL(f);
   };
-  const save=()=>{ const newName=(nm||'').trim()||s.user.name; app.set({ user:Object.assign({}, s.user, { name:newName, photo:photo }) }); syncAvatarToServer(photo); app._avatarSynced=true; syncNameToServer(newName); toast('تم حفظ الملف الشخصي ✅'); go('profile',{},{resetStack:true}); };
+  const save=()=>{
+    const newName=(nm||'').trim();
+    // Reject empty names BEFORE saving the photo. Previously, an empty trimmed
+    // name silently fell back to the old name AND still saved the photo + showed
+    // "✅ saved", so the user thought their empty-name attempt was rejected
+    // when really only the name was. Mirrors onboard_name's gate.
+    if(!newName){ toast('اكتب اسمك أول'); return; }
+    app.set({ user:Object.assign({}, s.user, { name:newName, photo:photo }) });
+    syncAvatarToServer(photo); app._avatarSynced=true; syncNameToServer(newName);
+    toast('تم حفظ الملف الشخصي ✅');
+    go('profile',{},{resetStack:true});
+  };
   return frame(
     statusBar(),
     lessonTop(0, 'عدّل حسابك', ()=>go('profile',{},{resetStack:true})),
@@ -3694,7 +4112,7 @@ SCREENS.profile_edit = (s)=>{
       h('input',{ id:'photoInput', type:'file', accept:'image/*', style:{ display:'none' }, onChange:onFile }),
       h('div',{style:{ display:'flex', flexDirection:'column', alignItems:'center', gap:'12px', marginTop:'8px','--i':0 }},
         h('button',{class:'press', onClick:pick, 'aria-label':'غيّر الصورة', style:{ position:'relative', borderRadius:'50%' }},
-          avatar({ photo:photo, initial:(nm||'ص')[0], size:120, ring:`0 7px 0 ${T.PD}` }),
+          avatar({ photo:photo, initial:initialOf(nm,'ص'), size:120, ring:`0 7px 0 ${T.PD}` }),
           h('span',{style:{ position:'absolute', bottom:'0', insetInlineEnd:'0', width:'38px', height:'38px', borderRadius:'50%', background:T.P, color:'#fff', border:'3px solid #fff', display:'flex', alignItems:'center', justifyContent:'center' }}, ico('edit',{size:16}))),
         h('button',{class:'press', onClick:pick, style:{ color:T.P, fontWeight:900, fontSize:'14px' }}, photo?'غيّر الصورة':'أضف صورة'),
         photo ? h('button',{class:'press', onClick:()=>app.setUI({photo:''}), style:{ color:T.bad, fontWeight:800, fontSize:'12.5px' }},'احذف الصورة') : null),
@@ -3709,17 +4127,15 @@ SCREENS.profile_edit = (s)=>{
 
 /* ===================== UNIT HUB ===================== */
 SCREENS.unit_hub = (s)=>{
-  // Writing is an optional FINAL step that only exists for generated chapters
-  // (app._writing). When it's present it counts toward the unit's progress so the
-  // bar doesn't read 5/5 (complete) while writing is still pending.
-  const hasW=!!app._writing;
-  const total=SECTION_ORDER.length+(hasW?1:0);
+  // L6: writing is OUT OF SCOPE per CLAUDE.md, so always count the 5 core
+  // sections — Home, Journey, and the Unit Hub now agree. (Writing was
+  // previously a 6th section here, contradicting Home's "5 أقسام".)
+  const total=SECTION_ORDER.length;
   // Re-entering a chapter the learner already finished must show all sections as
   // done (review state), not the reset/locked initial state — `sections` only
   // tracks the CURRENT chapter, so switching away and back wipes it.
   const isReviewed=!!(s.doneChapters||{})[s.currentChapter];
-  const done=isReviewed ? total
-    : sectionsDoneCount()+((hasW && s.sections.writing==='done')?1:0);
+  const done=isReviewed ? total : sectionsDoneCount();
   return frame(
     statusBar(),
     lessonTop(done/total, UNIT.name, ()=>tabGo('journey')),
@@ -3862,7 +4278,7 @@ SCREENS.word_teach = (s)=>{
         const exRows=exs.map((ex,exi)=>{ const exPlaying=s.ui.playId===('ex'+exi);
           return h('div',{style:{ display:'flex', alignItems:'flex-start', gap:'10px', borderTop: exi? `1px solid ${T.line}`:'none', paddingTop: exi?'10px':'0' }},
             h('button',{class:'press', 'aria-label':'اسمع', onClick:()=>{ app.setUI({playId:'ex'+exi}); Audio2.speak(ex.en,()=>app.setUI({playId:null})); },
-              style:{ width:'34px', height:'34px', borderRadius:'10px', background:exPlaying?T.P:T.Psoft, color:exPlaying?'#fff':T.P, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:'2px' }}, ico(exPlaying?'pause':'volume',{size:17})),
+              style:{ width:'44px', height:'44px', borderRadius:'12px', background:exPlaying?T.P:T.Psoft, color:exPlaying?'#fff':T.P, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:'-1px' }}, ico(exPlaying?'pause':'volume',{size:19})),
             h('div',{style:{ flex:1, minWidth:0 }},
               h('div',{class:'en', style:{ fontSize:'16px', fontWeight:600, lineHeight:1.5 }}, ex.en),
               exTr ? h('div',{style:{ fontSize:'13px', color:T.mut, fontWeight:700, marginTop:'3px' }}, ex.ar) : null));
@@ -3920,7 +4336,7 @@ function spellUI(cfg){
       h('div',{style:{flex:1}}, bigBtn('كمّل', { icon:'arrowL', onClick:cfg.onPass })));
   } else {
     bodyKids=[ head,
-      h('div',{style:{'--i':2}}, h('input',{ id:'spellInput', class:'field en', 'aria-label':'اكتب الكلمة بالإنجليزية', placeholder:'type here…', autocapitalize:'none', autocorrect:'off', spellcheck:'false', style:{ textAlign:'center', fontSize:'22px' } })),
+      h('div',{style:{'--i':2}}, h('input',{ id:'spellInput', class:'field en', 'aria-label':'اكتب العبارة بالإنجليزية', placeholder:'اكتب هنا…', autocapitalize:'none', autocorrect:'off', spellcheck:'false', style:{ textAlign:'center', fontSize:'22px' } })),
       tries>=1 ? h('div',{style:{ textAlign:'center', color:T.mut, fontWeight:800, fontSize:'13px','--i':3 }}, 'تلميح: تبدأ بحرف ', h('span',{class:'en', style:{color:T.P, fontWeight:900}}, cfg.answer[0].toUpperCase())) : null,
     ];
     foot=bigBtn('تحقّق', { icon:'check', onClick:check });
@@ -3929,7 +4345,7 @@ function spellUI(cfg){
     statusBar(),
     lessonTop(cfg.progress, cfg.label, cfg.onClose),
     body({pad:'16px 20px 0', gap:'13px'},
-      h('div',{style:{ fontSize:'20px', fontWeight:900,'--i':0 }},'اكتب الكلمة بالإنجليزية'),
+      h('div',{style:{ fontSize:'20px', fontWeight:900,'--i':0 }},'اكتب العبارة بالإنجليزية'),
       ...bodyKids),
     footer(foot),
     res==='ok' ? celebrate() : null
@@ -4483,7 +4899,7 @@ SCREENS.reading = (s)=>{
           slowChip(),
           h('button',{class:'press', onClick:()=>app.setUI({tr:!tr}), style:{ display:'flex', alignItems:'center', gap:'5px', color:T.P, fontWeight:800, fontSize:'12px', background:T.Psoft, padding:'6px 11px', borderRadius:'99px', flexShrink:0 }},
             ico('globe',{size:15}), tr?'خبي الترجمة':'ترجمة'),
-          h('button',{class:'press', 'aria-label':'اسمع النص', onClick:()=>{ app.setUI({playId:'r'}); Audio2.speak(full,()=>app.setUI({playId:null}), speakRate()); }, style:{ width:'34px', height:'34px', borderRadius:'10px', background:T.P, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, boxShadow:`0 3px 0 ${T.PD}` }}, ico(playing?'pause':'volume',{size:17}))),
+          h('button',{class:'press', 'aria-label':'اسمع النص', onClick:()=>{ app.setUI({playId:'r'}); Audio2.speak(full,()=>app.setUI({playId:null}), speakRate()); }, style:{ width:'44px', height:'44px', borderRadius:'12px', background:T.P, color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, boxShadow:`0 3px 0 ${T.PD}` }}, ico(playing?'pause':'volume',{size:19}))),
         h('div',{style:{ display:'flex', flexDirection:'column', gap:'9px' }},
           ...READING.lines.map(l=>h('div',null,
             h('div',{class:'en', style:{ fontSize:'15.5px', fontWeight:600, lineHeight:1.5 }}, l.en),
@@ -4503,8 +4919,17 @@ function startConvoTimer(){
   clearInterval(app._timer);
   app._timer=setInterval(()=>{
     if(app.state.screen!=='convo'){ clearInterval(app._timer); app._timer=null; return; }
-    const tl=(app.state.ui.timeLeft||0)-1;
-    if(tl<=0){ clearInterval(app._timer); app._timer=null; app.setUI({timeLeft:0}); go('convo_summary',{used:app.state.ui.used||{}, turns:app.state.ui.turn||0, messages:app.state.ui.messages||[]},{resetStack:true}); return; }
+    // M3: don't burn the learner's 3 minutes while Maya is preparing/typing.
+    // Defensive — startConvoTimer is already only called after the opener
+    // arrives, but this also pauses the clock between turns while the AI
+    // composes its reply (mtyping). A user reply that takes 5s of LLM
+    // latency shouldn't cost 5s of their conversation time.
+    const ui = app.state.ui || {};
+    if(!ui.convoInit || ui.mtyping){
+      return;
+    }
+    const tl=(ui.timeLeft||0)-1;
+    if(tl<=0){ clearInterval(app._timer); app._timer=null; app.setUI({timeLeft:0}); go('convo_summary',{used:ui.used||{}, turns:ui.turn||0, messages:ui.messages||[]},{resetStack:true}); return; }
     // Patch ONLY the timer node — don't rebuild the whole conversation screen
     // (and its growing message list) once per second.
     app.state.ui.timeLeft=tl;
@@ -5155,6 +5580,60 @@ function render(){
 /* ===================== BOOT ===================== */
 function boot(){
   const wasAuthed = app.load();
+  // C1: Never auto-resume into a live conversation. Reloading mid-mic leaves
+  // savedPosition pointing at a screen that expects an open recording + AI
+  // session — restoring there hangs the splash on resources that no longer
+  // exist. Scrub to the unit hub so Home's resume button + any restore path
+  // land safely; the user can re-enter the conversation from there.
+  try{
+    if(app.state && app.state.savedPosition && app.state.savedPosition.screen==='convo'){
+      app.state.savedPosition = { screen:'unit_hub', params:(app.state.savedPosition.params||{}) };
+    }
+  }catch(_){}
+  // M7: xpToday belongs to xpDay. awardXp() resets the pair correctly when
+  // XP is GRANTED on a new day, but on a quiet day (zero XP yet) the stored
+  // pair drifts — xpToday holds yesterday's points with yesterday's xpDay.
+  // Home already coalesces correctly on render, but other call sites read
+  // xpToday raw. Reset at boot so the stored field never lies.
+  try{
+    const _today = new Date().toDateString();
+    if(app.state && app.state.xpDay && app.state.xpDay !== _today && (app.state.xpToday||0) > 0){
+      app.state.xpToday = 0;
+      app.state.xpDay = _today;
+    }
+  }catch(_){}
+  // H2 + M6: Legacy-save reconciliation. Older builds left users in an
+  // inconsistent state where doneChapters[cur] was true but `sections` had
+  // been reset back to fresh — so Home showed "0/5 sections" for a chapter
+  // Journey & Hub both called مراجعة, AND the SRS "7 words awaiting review"
+  // contradicted the unit's "you haven't learned these yet". Heal on boot:
+  // if the current chapter is marked done, force sections + unitDone to
+  // reflect that. With sections in agreement, the SRS counters no longer
+  // contradict unit state. loadChapter now has the matching logic for
+  // forward transitions; this catches saves written before that fix.
+  try{
+    const _cur = app.state && app.state.currentChapter;
+    const _dc = (app.state && app.state.doneChapters) || {};
+    if(_cur && _dc[_cur]){
+      const sec = app.state.sections || {};
+      const allDone = sec.words==='done' && sec.listening==='done' && sec.reading==='done' && sec.conversation==='done' && sec.grammar==='done';
+      if(!allDone){
+        app.state.sections = { words:'done', listening:'done', reading:'done', conversation:'done', grammar:'done', writing: sec.writing==='done' ? 'done' : (sec.writing||'done') };
+        app.state.unitDone = true;
+        app.state.fullQuizDone = true;
+      }
+      // M6: a chapter is marked done but per-word teach flags weren't set
+      // (older client). Backfill so the word-teach screen doesn't re-prompt
+      // "كلمة جديدة" for words SRS already considers learned.
+      const wordsArr = Array.isArray(app.state.words) ? app.state.words : null;
+      if(wordsArr){
+        const allLearned = wordsArr.every(w => w && w.teach && w.spell && w.pron && w.mean);
+        if(!allLearned){
+          app.state.words = [0,1,2,3,4].map(i => Object.assign({}, wordsArr[i]||{}, { teach:true, spell:true, pron:true, mean:true }));
+        }
+      }
+    }
+  }catch(_){}
   // Capture a referral code from the invite link (?ref=CODE), remember it until the
   // user signs up, then strip it from the URL so a shared/bookmarked link can't
   // mis-attribute a later visitor.
@@ -5230,7 +5709,13 @@ function boot(){
     try{ navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{}); }catch(_){}
   }
   // pause speech when tab hidden
-  document.addEventListener('visibilitychange', ()=>{ if(document.hidden){ Audio2.stop(); try{ const TBh=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBh&&TBh.releaseMic) TBh.releaseMic(); }catch(_){} app._micWarmKey=null; } });
+  document.addEventListener('visibilitychange', ()=>{
+    // L4: pause the .flame CSS animations when the tab is hidden so they
+    // don't burn CPU/battery in the background. The CSS rule scoped to
+    // body[data-hidden="1"] reads this attribute.
+    try{ document.body.dataset.hidden = document.hidden ? '1' : ''; }catch(_){}
+    if(document.hidden){ Audio2.stop(); try{ const TBh=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBh&&TBh.releaseMic) TBh.releaseMic(); }catch(_){} app._micWarmKey=null; }
+  });
 
   // When connectivity returns, flush the last cloud save that failed.
   window.addEventListener('online', ()=>{ try{ const TB=(typeof window!=='undefined')&&window.TalaqaBackend; if(app._cloudDirty && app._restored && app._lastUnsaved && TB && TB.saveState){ Promise.resolve(TB.saveState(app._lastUnsaved)).then(ok=>{ app._cloudDirty=!ok; if(ok) app._lastUnsaved=null; if(app.notify) app.notify(); }); } }catch(_){} });
@@ -5243,6 +5728,23 @@ function boot(){
   app.set({ screen:'splash', params:{}, stack:[] });
   render();
 
+  // C1: Splash watchdog. route() awaits Supabase reads (loadState + profile,
+  // each up to T_DB=8s) before painting the real UI. If anything in that chain
+  // stalls — slow network, queued RPC, transient outage — we MUST not leave the
+  // user staring at a blank splash forever. After 4s, force a render from
+  // local state (talaqa.save.v1 was already loaded by app.load()); the home
+  // screen will lazily refresh anything missing once the network catches up.
+  setTimeout(()=>{
+    try{
+      if(app.state.screen !== 'splash') return;             // route() already moved us
+      if(typeof restoreCurrentChapter==='function') try{ restoreCurrentChapter(); }catch(_){}
+      // H5: streak must only advance on REAL learning activity (completeSection).
+      // Do NOT touchStreak() here — the watchdog firing is just "the app opened".
+      const dest = wasAuthed ? 'home' : 'auth';
+      go(dest, {}, {resetStack:true});
+    }catch(_){}
+  }, 4000);
+
   // Native shell polish: hide the launch splash once the first frame is painted, and
   // style the status bar to match the surface (dark icons on the light UI, light on dark).
   try{
@@ -5254,7 +5756,33 @@ function boot(){
       capInvoke('SplashScreen','hide',{}).catch(()=>{});
       capInvoke('StatusBar','setStyle',{ style: app.state.darkMode ? 'DARK' : 'LIGHT' }).catch(()=>{});
       capInvoke('StatusBar','setBackgroundColor',{ color: app.state.darkMode ? '#0e1220' : '#eef1ff' }).catch(()=>{});
+      // RevenueCat: configure once the native app is up. logIn happens after auth
+      // resolves (see TB.init / talaqa:ready below). Safe to call without uid; the
+      // SDK uses an anonymous id until logIn() is called.
+      try{ if(IAP && IAP.available && IAP.available()) IAP.configure(null).catch(()=>{}); }catch(_){}
     }
+  }catch(_){}
+
+  // After Supabase auth resolves, sync entitlement + identify the user to RevenueCat.
+  // Fires on the bridge's "ready" event (post sb.auth.getUser) and on visibility
+  // resume so a returning user gets a fresh entitlement read.
+  function _postAuthIAP(){
+    try{
+      const TB = (typeof window!=='undefined') && window.TalaqaBackend;
+      if(!TB || !TB._user || !TB._user.id) return;
+      const uid = TB._user.id;
+      if(IAP && IAP.available && IAP.available()){ IAP.logIn(uid).catch(()=>{}); }
+      if(IAP && IAP.refreshEntitlementFromServer) IAP.refreshEntitlementFromServer();
+    }catch(_){}
+  }
+  try{ window.addEventListener('talaqa:ready', _postAuthIAP); }catch(_){}
+  try{ document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) _postAuthIAP(); }); }catch(_){}
+  // Catch the case where talaqa:ready already fired before we registered above —
+  // if the backend is already initialized with a user, identify to RevenueCat now.
+  try{
+    const _TB = (typeof window!=='undefined') && window.TalaqaBackend;
+    if(_TB && _TB._user && _TB._user.id){ _postAuthIAP(); }
+    else { setTimeout(_postAuthIAP, 1500); }
   }catch(_){}
 
   // Decide the destination after the splash. When the backend is configured we
@@ -5293,7 +5821,11 @@ function boot(){
       app._restored = true;                // offline/no-backend: local persistence only
       if(typeof restoreCurrentChapter==='function') restoreCurrentChapter();
     }
-    if(typeof touchStreak==='function') touchStreak();   // count today's activity
+    // H5: streak counts REAL learning activity only — completeSection() is the
+    // sole driver. Opening the app (this code path) must NOT advance the streak,
+    // otherwise the "سلسلتك في خطر — كمّل درس اليوم" banner lies (the streak
+    // would already be safe just from launching). Repair restoration on a
+    // completed lesson is still handled inside touchStreak().
     if(app.state.screen==='splash') go(dest,{},{resetStack:true});
   };
   if(hasBackend && !(window.TalaqaBackend && window.TalaqaBackend.ready)){

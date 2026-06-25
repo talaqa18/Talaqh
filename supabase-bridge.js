@@ -201,10 +201,58 @@ const TB = {
     // would reset a returning user to "beginner").
     const saved = await this.loadState();
     const patch = (saved && typeof saved === "object") ? saved : {};
-    try { patch._leaderboard = await this.getLeaderboard(8); } catch (_) {}
-    // Referral stats + server-authoritative premium entitlement. Overrides any
-    // stale premium_until from the client blob with the value the server computes.
-    try { const st = await this.getReferralStats(); if (st) { patch.referralStats = st; patch.premium_until = st.premium_until || null; } } catch (_) {}
+    // Read the SERVER profile too, independently of the state.json blob. This is
+    // the cross-device source-of-truth for display_name / avatar_url and is the
+    // server-authoritative onboarding_completed flag the verify path uses to
+    // decide isNew (no more guessing from `patch.level`). Wrapped in its own
+    // try/catch so a profile-read failure does not break sign-in.
+    let prof = null;
+    try {
+      let uid = this._user?.id;
+      if (!uid) { try { uid = (await sb.auth.getUser()).data.user?.id; } catch (_) {} }
+      if (uid) {
+        const res = await withTimeout(
+          sb.from("profiles").select("display_name,avatar_url,goal,age,onboarding_completed,premium_until").eq("id", uid).single(),
+          T_DB, "profile",
+        );
+        if (res && !res.error) prof = res.data || null;
+      }
+    } catch (_) {}
+    if (prof) {
+      patch._serverOnboardingCompleted = !!prof.onboarding_completed;
+      // Prefer local (potentially fresher) values; fall back to server. Empty
+      // strings on the client should NOT mask a real server value.
+      const u = (patch.user && typeof patch.user === "object") ? patch.user : {};
+      patch.user = Object.assign({}, u, {
+        name:       (u.name && String(u.name).trim()) || prof.display_name || u.name || "",
+        avatar:     u.avatar || prof.avatar_url || null,
+        goal:       u.goal || prof.goal || null,
+        age:        u.age || prof.age || null,
+      });
+      if (prof.display_name) this._localName = String(prof.display_name).trim();
+      // Server-authoritative premium_until — overrides client cache. The
+      // referralStats read below may override again with the merged value.
+      if (prof.premium_until) patch.premium_until = prof.premium_until;
+    }
+    // C1: leaderboard + referral stats are SECONDARY widgets. The Home screen
+    // already refreshes them lazily on its first render (refreshLeaderboard /
+    // refreshReferralStats), so awaiting them here just gates the splash on
+    // two extra round-trips — up to T_DB*2 of dead time on a slow network.
+    // Kick them off without awaiting; they apply via app.set when they land.
+    try {
+      const _self = this;
+      Promise.resolve().then(async () => {
+        // getLeaderboard populates this.leaderboardCache, which the Home screen
+        // reads from on render. notify() so an already-rendered Home picks it up.
+        try { await _self.getLeaderboard(8); if (typeof window !== "undefined" && window.app && window.app.notify) { try { window.app.notify(); } catch (_) {} } } catch (_) {}
+        try {
+          const st = await _self.getReferralStats();
+          if (st && typeof window !== "undefined" && window.app) {
+            try { window.app.set({ referralStats: st, premium_until: st.premium_until || null }); } catch (_) {}
+          }
+        } catch (_) {}
+      });
+    } catch (_) {}
     return patch;
   },
   /** Save the whole Talaqa state blob to the user's private storage. */
@@ -301,22 +349,52 @@ const TB = {
   async getLeaderboard(limit = 8) {
     const sb = await ensureClient();
     if (!sb) return null;
+    // M4: bridge-level throttle. The home screen and the boot-time background
+    // refresh both call this, plus any incidental re-renders — the audit saw
+    // multiple in-flight POST /rpc/get_leaderboard requests in pending. A
+    // 25s session cache here means redundant callers reuse the prior result
+    // without a round-trip. In-flight de-dup via _lbPromise so concurrent
+    // calls collapse to one network request.
+    const now = Date.now();
+    if (this._lbPromise) return this._lbPromise;
+    if (this.leaderboardCache && this._lbAt && (now - this._lbAt) < 25000) {
+      return this.leaderboardCache;
+    }
+    const self = this;
+    this._lbPromise = (async () => {
     const { data, error } = await withTimeout(sb.rpc("get_leaderboard", { p_period: "all_time", p_limit: limit }), T_DB, "leaderboard");
-    if (error || !data) return null;
+    if (error || !data) { self._lbPromise = null; return null; }
     const hues = [18, 250, 325, 160, 210, 40, 280];
-    const rows = data.map((r, i) => ({
-      rank: Number(r.rank),
+    // H3: defense-in-depth filter. The server-side cleanup (migration 0021)
+    // is authoritative, but mirror its rules here so the leaderboard is clean
+    // even on a deployment lag or older DB. Drops:
+    //  - Soft-deleted accounts whose display_name was renamed "del<ts>".
+    //  - Known internal test handles (case-insensitive).
+    // Empty names still fall through to the localized default below.
+    const DROP_NAMES = new Set(["lbtester","lb tester","qa","qatest","test","tester","talaqa qa","talaqa test"]);
+    const cleaned = data.filter(r => {
+      const n = String(r.display_name || "").trim();
+      if (/^del[0-9]{6,}/i.test(n)) return false;                // soft-deleted id leak
+      if (DROP_NAMES.has(n.toLowerCase())) return false;          // QA accounts
+      return true;
+    });
+    const rows = cleaned.map((r, i) => ({
+      rank: i + 1,                                                // re-dense-rank after the drops
       // Prefer the server's real name; for the caller's own row, fall back to the
       // locally-known name before the generic placeholder so "me" is never "متعلّم".
-      name: r.display_name || (r.is_me && this._localName) || "متعلّم",
-      initial: ((r.display_name || (r.is_me && this._localName) || "؟").trim()[0]) || "؟",
+      name: r.display_name || (r.is_me && self._localName) || "متعلّم مجهول",
+      initial: (Array.from((r.display_name || (r.is_me && self._localName) || "؟").trim())[0]) || "؟",
       pts: r.total_xp || 0,
       hue: hues[i % hues.length],
       avatar: r.avatar_url || null, // participant photo (shown in the leaderboard)
       me: !!r.is_me,
     }));
-    this.leaderboardCache = rows;
+    self.leaderboardCache = rows;
+    self._lbAt = Date.now();
     return rows;
+    })();
+    try { const out = await this._lbPromise; return out; }
+    finally { this._lbPromise = null; }
   },
 
   /** Save the user's avatar (small data URL) to profiles so it shows in the
@@ -388,6 +466,38 @@ const TB = {
     const { data, error } = await withTimeout(sb.rpc("get_referral_stats"), T_DB, "ref-stats");
     if (error) throw error;
     return data;
+  },
+  // ---- Entitlement (paywall / IAP) ----------------------------------------
+  /** Server-authoritative "does this user have paid access right now?"
+   *  Reads from the is_entitled(uid) DB function (migration 0020). Returns a
+   *  boolean (false on any error so we fail closed: no free passes on glitches). */
+  async isEntitled() {
+    const sb = await ensureClient(); if (!sb) return false;
+    try {
+      const u = await sb.auth.getUser();
+      const uid = u && u.data && u.data.user && u.data.user.id;
+      if (!uid) return false;
+      const { data, error } = await withTimeout(sb.rpc("is_entitled", { p_user_id: uid }), T_DB, "is-entitled");
+      if (error) return false;
+      return !!data;
+    } catch (_) { return false; }
+  },
+  /** Atomic free-tier daily-section gate (migration 0020). Paid users always
+   *  pass; free users are limited to 1 section per local-tz day. Returns the
+   *  RPC row { allowed, entitled, count, cap } or null on transport failure.
+   *  Callers SHOULD treat null as "allowed" only on the web build (offline-
+   *  tolerant); native must fail-closed. */
+  async consumeDailySection() {
+    const sb = await ensureClient(); if (!sb) return null;
+    try {
+      const u = await sb.auth.getUser();
+      const uid = u && u.data && u.data.user && u.data.user.id;
+      if (!uid) return null;
+      const { data, error } = await withTimeout(sb.rpc("consume_daily_section", { p_user_id: uid }), T_DB, "consume-section");
+      if (error) return null;
+      // The DEFINER RPC returns a single setof row; supabase-js may give an array.
+      return Array.isArray(data) ? (data[0] || null) : (data || null);
+    } catch (_) { return null; }
   },
   async tutor({ targetWords, level, goal, history, userText, opener } = {}) {
     return await this._invoke("tutor", {
@@ -512,6 +622,12 @@ const TB = {
     const MIN_MS = opts.minMs || 500;           // ignore the first instant (tap noise / lead-in)
     const START = opts.startLevel || 0.025;     // RMS above this = speech detected
     const STOP = opts.stopLevel || 0.012;       // RMS below this = silence
+    // M1 — no-speech bail. The old VAD only ended a turn AFTER speech was
+    // detected; if the learner tapped record and said nothing at all, the
+    // recording ran until the maxMs hard-stop (audit observed >8s stuck).
+    // Auto-end after this many ms of silence-only so the UI can prompt them
+    // to try again instead of holding the mic open.
+    const NO_SPEECH_MS = opts.noSpeechMs || 3500;
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return { stop() {} };
@@ -533,6 +649,8 @@ const TB = {
         const rms = Math.sqrt(sum / buf.length);
         const now = Date.now();
         if (now - t0 < MIN_MS) return;
+        // M1: no-speech bail — closes the mic even if the learner stayed silent.
+        if (!spoke && (now - t0) >= NO_SPEECH_MS) { finish(); return; }
         if (rms >= START) { spoke = true; quietAt = 0; }
         else if (spoke && rms < STOP) {
           if (!quietAt) quietAt = now;
