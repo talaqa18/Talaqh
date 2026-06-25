@@ -29,7 +29,7 @@
     "@capacitor/local-notifications": "^8.2.0",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
-    "@revenuecat/purchases-capacitor": "11.0.0",
+    "@revenuecat/purchases-capacitor": "^13.2.0",
     "@supabase/supabase-js": "^2.107.0",
     "microsoft-cognitiveservices-speech-sdk": "^1.50.0",
     "react": "^19.2.7",
