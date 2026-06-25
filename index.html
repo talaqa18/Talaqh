@@ -475,7 +475,20 @@ const app = {
   // transient celebration queue (NOT persisted): pending milestone screens to show.
   _mileQ:[],
   subscribe(fn){ this.listeners.push(fn); },
-  notify(){ this.listeners.forEach(f=>f(this.state)); },
+  // rAF-coalesced notify: a burst of set() / setUI() calls within the same
+  // animation frame triggers ONE render instead of N. Without this, render-time
+  // side effects (paywall fetches, leaderboard refreshes, etc.) could double or
+  // triple the render work each frame, which was a major source of the lag the
+  // user reported on phone.
+  _notifyNow(){ this._notifyRaf=0; this.listeners.forEach(f=>{ try{ f(this.state); }catch(_){ } }); },
+  notify(){
+    if(this._notifyRaf) return;
+    if(typeof requestAnimationFrame==='function'){
+      this._notifyRaf = requestAnimationFrame(()=>this._notifyNow());
+    } else {
+      this._notifyRaf = setTimeout(()=>this._notifyNow(), 0);
+    }
+  },
   set(patch){ Object.assign(this.state, patch); this.persist(); this.notify(); },
   setUI(patch){ this.state.ui = Object.assign({}, this.state.ui, patch); this.notify(); },
   persist(){
@@ -2796,45 +2809,48 @@ function maybeGoalMet(){
 }
 /* the calendar day before `d` (a Date), as a toDateString() */
 function yesterday(d){ const y=new Date(d.getTime()); y.setDate(y.getDate()-1); return y.toDateString(); }
-/* Real daily streak with FREEZES + REPAIR + longestStreak. Pure Date logic so it runs
-   under Node too. Consecutive day = +1; exactly one missed day burns a freeze and keeps
-   the streak; a bigger gap stashes the old streak in `repairFrom` so home can offer a
-   one-tap restore. A freeze refills every 7-day milestone (capped at 2). */
+/* Honest daily streak. Consecutive day = +1; ANY missed day breaks the streak
+   (no silent freezes, no magical repair). `repairFrom` keeps the prior streak
+   value purely for an informational "كانت سلسلتك X يوم" display — it cannot be
+   used to restore the streak. Pure Date logic so it runs under Node too. */
 function touchStreak(){
   const d=new Date();
   const today=d.toDateString();
   const yest=new Date(d.getTime()-864e5).toDateString();
-  const dayBefore=new Date(d.getTime()-2*864e5).toDateString();
   const last=app.state.lastActiveDay;
-  // already active today: if a repair is pending, this completion restores the streak.
-  if(last===today){
-    if((app.state.repairFrom||0)>0){
-      let streak=app.state.repairFrom;
-      app.set({ streak, repairFrom:0, longestStreak:Math.max(app.state.longestStreak||0, streak) });
-    }
-    return;
-  }
+  if(last===today) return;                                   // already active today: no-op
   let streak;
   const patch={};
   if(last===yest || last===''){                              // consecutive day / first ever
     streak=(app.state.streak||0)+1;
-  } else if(last===dayBefore && (app.state.streakFreezes||0)>0){ // one full day skipped → freeze
-    streak=app.state.streak||1;
-    patch.streakFreezes=(app.state.streakFreezes||0)-1;
-    patch.freezeUsedDay=today;
-    toast('❄️ استخدمنا تجميد السلسلة — سلسلتك آمنة!');
-  } else {                                                   // a real gap → offer repair, reset
+  } else {                                                   // any gap of 1+ days → broken
     patch.repairFrom=(app.state.streak||0);
     streak=1;
   }
   patch.streak=streak;
   patch.lastActiveDay=today;
   patch.longestStreak=Math.max(app.state.longestStreak||0, streak);
-  // refill a freeze at every 7-day milestone (capped at 2)
-  if(streak>0 && streak%7===0){ patch.streakFreezes=Math.min(2, (patch.streakFreezes!=null?patch.streakFreezes:(app.state.streakFreezes||0))+1); }
   app.set(patch);
   if(typeof checkMilestones==='function') checkMilestones();
   if(typeof evalAchievements==='function') evalAchievements();
+}
+/* Expire a stale streak at boot/visibility-resume. If the user opens the app and
+   their last activity was older than yesterday, the streak is broken NOW — not
+   only when they complete a section. Without this, home would display the old
+   streak number until they did something, which made users feel the streak was
+   "running on its own". The number gets stashed in `repairFrom` for an
+   informational "كانت سلسلتك X يوم" message. */
+function expireStaleStreak(){
+  try{
+    const s=app.state; if(!s) return;
+    const last=s.lastActiveDay; if(!last) return;
+    const d=new Date();
+    const today=d.toDateString();
+    const yest=new Date(d.getTime()-864e5).toDateString();
+    if(last===today || last===yest) return;                   // still valid
+    if((s.streak||0)<=0) return;                              // already broken
+    app.set({ streak:0, repairFrom:(s.repairFrom||s.streak||0), lastActiveDay:'' });
+  }catch(_){}
 }
 
 /* ===================== MILESTONES & ACHIEVEMENTS ===================== */
@@ -3053,18 +3069,18 @@ function goalRing(s){
       h('div',{style:{ display:'flex', alignItems:'center', gap:'6px', marginTop:'8px', fontSize:'12px', fontWeight:800, color:T.CO }},
         flame(16,T.CO), h('span',null,'سلسلة '+ar(s.streak)+' يوم'))));
 }
-/* one-tap streak restore — only when a repair is pending (a streak was lost). Tapping
-   continues to the saved lesson; completing a section today restores the streak. */
-function repairCard(s, cont){
+/* Honest streak: when a streak was broken, show an informational badge (no
+   tap-to-restore). Hidden once a fresh streak is rebuilt or after dismissal. */
+function repairCard(s){
   if(!((s.repairFrom||0)>0)) return null;
+  if((s.streak||0)>=(s.repairFrom||0)) return null;          // rebuilt past the old peak — hide
   return card({ p:0, style:{'--i':1, overflow:'hidden' }, bw:2.5, border:'#ffd0a8', edgeCol:'#f0a35a' },
-    h('button',{class:'press', onClick:()=>go(cont.screen||'unit_hub', cont.params||{}),
-      style:{ width:'100%', textAlign:'start', display:'flex', alignItems:'center', gap:'12px', background:'linear-gradient(135deg,#fff6ec,#ffe9d2)', padding:'14px' }},
+    h('div',{style:{ display:'flex', alignItems:'center', gap:'12px', background:'linear-gradient(135deg,#fff6ec,#ffe9d2)', padding:'14px' }},
       h('span',{style:{ width:'46px', height:'46px', borderRadius:'14px', background:'linear-gradient(135deg,#ffb24d,#ff6a3d)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, boxShadow:'0 4px 0 #d8542a', fontSize:'22px' }},'🔥'),
       h('div',{style:{ flex:1, minWidth:0 }},
         h('div',{style:{ fontSize:'15px', fontWeight:900, color:T.ink }},'كانت سلسلتك '+ar(s.repairFrom)+' يوم'),
-        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }},'كمل درس اليوم عشان تسترجعها')),
-      h('span',{style:{ display:'flex', flexShrink:0, color:'#e06a2a' }}, ico('arrowL',{size:22, sw:2.6}))));
+        h('div',{style:{ fontSize:'12.5px', color:T.mut, fontWeight:700, marginTop:'1px' }},'انكسرت — ابدأ سلسلة جديدة بإكمال درس اليوم')),
+      h('button',{class:'press', onClick:()=>app.set({ repairFrom:0 }), 'aria-label':'إخفاء', style:{ flexShrink:0, color:'#a06030', fontWeight:900, padding:'6px 10px', borderRadius:'10px' }}, '✕')));
 }
 SCREENS.home = (s)=>{
   const done=sectionsDoneCount(), total=SECTION_ORDER.length;
@@ -3094,8 +3110,8 @@ SCREENS.home = (s)=>{
           h('span',{style:{ fontSize:'10px', opacity:.92, fontWeight:800 }},'يوم')),
         h('button',{class:'press', onClick:()=>go('profile'), 'aria-label':'ملفي', style:{ borderRadius:'50%' }},
           avatar({ photo:s.user.photo, initial:initialOf(s.user.name,'ص'), size:42, ring:`0 6px 0 ${T.PD}` }))),
-      // one-tap streak repair (only when a streak was just lost)
-      repairCard(s, cont),
+      // honest "your streak was X" notice (informational; no tap-to-restore)
+      repairCard(s),
       // هدف اليوم — daily goal ring hero
       goalRing(s),
       // streak-at-risk nudge (afternoon/evening, has a streak, nothing done today)
@@ -3690,9 +3706,14 @@ SCREENS.paywall = (s)=>{
 
   /* Lazy-fetch RevenueCat offerings on first paywall render. Prices are read
      from the offering when present; we fall back to PLANS constants otherwise
-     (web, or native before the first offering fetch lands). */
+     (web, or native before the first offering fetch lands). Once an attempt
+     has resolved (busy=false), gate retries on `iapOfferingError` being
+     EMPTY — otherwise a null offering + error message would trigger a refetch
+     on every render (a render-storm + StoreKit hammering that surfaced as
+     "the paywall lags / crashes" on the user's phone). User can retry via
+     the explicit button which clears the error first. */
   const offering = s.ui.iapOffering || null;
-  if(iapOn && !offering && !s.ui.iapOfferingBusy){
+  if(iapOn && !offering && !s.ui.iapOfferingBusy && !s.ui.iapOfferingError){
     app.setUI({ iapOfferingBusy:true, iapOfferingError:'' });
     Promise.resolve(IAP.getOfferings()).then(o=>{
       const ok = o && Array.isArray(o.availablePackages) && o.availablePackages.length;
@@ -5580,6 +5601,10 @@ function render(){
 /* ===================== BOOT ===================== */
 function boot(){
   const wasAuthed = app.load();
+  // Honest streak: if the user opens the app and hasn't been active since before
+  // yesterday, break the streak immediately so home reflects reality (no silent
+  // continuation, no magical repair).
+  try{ expireStaleStreak(); }catch(_){}
   // C1: Never auto-resume into a live conversation. Reloading mid-mic leaves
   // savedPosition pointing at a screen that expects an open recording + AI
   // session — restoring there hangs the splash on resources that no longer
@@ -5715,6 +5740,9 @@ function boot(){
     // body[data-hidden="1"] reads this attribute.
     try{ document.body.dataset.hidden = document.hidden ? '1' : ''; }catch(_){}
     if(document.hidden){ Audio2.stop(); try{ const TBh=(typeof window!=='undefined')&&window.TalaqaBackend; if(TBh&&TBh.releaseMic) TBh.releaseMic(); }catch(_){} app._micWarmKey=null; }
+    // App resumed across midnight (or after sitting in the background for days):
+    // re-evaluate streak honesty so the home flame doesn't lie.
+    else { try{ expireStaleStreak(); }catch(_){} }
   });
 
   // When connectivity returns, flush the last cloud save that failed.
