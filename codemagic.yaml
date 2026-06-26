@@ -39,6 +39,16 @@ workflows:
       - name: Add iOS platform if missing
         script: |
           if [ ! -d "ios" ]; then npx cap add ios; fi
+      - name: Lock to iPhone only (drop iPad from Targeted Device Family)
+        script: |
+          # Capacitor's iOS template defaults to TARGETED_DEVICE_FAMILY = "1,2"
+          # (Universal: iPhone + iPad). The Arabic UI is sized for iPhone and
+          # the layout breaks on iPad — switch the target to iPhone-only ("1").
+          PBXPROJ="ios/App/App.xcodeproj/project.pbxproj"
+          sed -i.bak 's/TARGETED_DEVICE_FAMILY = "1,2"/TARGETED_DEVICE_FAMILY = "1"/g' "$PBXPROJ"
+          rm -f "$PBXPROJ.bak"
+          echo "After patch:"
+          grep TARGETED_DEVICE_FAMILY "$PBXPROJ" || echo "  (no matches — already iPhone-only?)"
       - name: Inject Info.plist keys (mic permission + encryption + portrait lock)
         script: |
           PLIST="ios/App/App/Info.plist"
