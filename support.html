@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>الدعم • طلاقة | Support • Talaqh</title>
+<meta name="robots" content="index, follow">
+<meta name="description" content="الدعم الفني وتواصل تطبيق طلاقة. Get support and contact for Talaqh app.">
+<style>
+  :root{
+    --bg:#f5f7ff; --card:#fff; --ink:#1c233f; --mut:#5a6390; --faint:#8a93b8;
+    --p:#5e79f5; --pd:#3f54c8; --line:#e0e6ff; --good:#22c55e;
+    --maxw:760px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:'Cairo','Tajawal','Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;
+    font-size:16px;line-height:1.75;-webkit-text-size-adjust:100%}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:74px 22px 80px}
+  .topbar{position:fixed;top:0;inset-inline-start:0;inset-inline-end:0;z-index:50;
+    background:rgba(245,247,255,.92);backdrop-filter:saturate(180%) blur(10px);
+    -webkit-backdrop-filter:saturate(180%) blur(10px);
+    border-bottom:1.5px solid var(--line);padding:max(env(safe-area-inset-top),10px) 16px 10px;
+    display:flex;align-items:center;gap:10px;font-family:inherit}
+  .backbtn{display:inline-flex;align-items:center;gap:8px;background:#fff;color:var(--p);
+    border:2px solid var(--p);border-radius:99px;padding:8px 16px 8px 12px;font-weight:900;
+    font-size:14px;cursor:pointer;font-family:inherit;box-shadow:0 3px 0 var(--pd);
+    text-decoration:none;transition:transform .08s}
+  .backbtn:active{transform:translateY(2px);box-shadow:0 1px 0 var(--pd)}
+  .backbtn svg{width:18px;height:18px}
+  .topbar-title{font-weight:900;font-size:14px;color:var(--mut)}
+  header{text-align:center;margin-bottom:30px}
+  .logo{display:inline-flex;align-items:center;justify-content:center;width:72px;height:72px;
+    background:linear-gradient(135deg,var(--p),var(--pd));color:#fff;border-radius:20px;
+    font-weight:900;font-size:30px;margin-bottom:14px;box-shadow:0 6px 0 var(--pd)}
+  h1{font-size:28px;margin:8px 0 4px;font-weight:900}
+  .sub{color:var(--mut);font-size:14px;font-weight:600}
+  .card{background:var(--card);border:1.5px solid var(--line);border-radius:20px;padding:22px 24px;
+    margin-bottom:18px;box-shadow:0 4px 0 var(--line)}
+  h2{font-size:19px;margin:0 0 10px;font-weight:900;color:var(--pd)}
+  h3{font-size:15.5px;margin:18px 0 6px;font-weight:800;color:var(--ink)}
+  p{margin:0 0 12px}
+  ul{margin:0 0 12px;padding-inline-start:22px}
+  li{margin-bottom:6px}
+  a{color:var(--p);font-weight:700;text-decoration:none}
+  a:hover{text-decoration:underline}
+  .lang-toggle{display:flex;gap:10px;justify-content:center;margin-bottom:24px}
+  .lang-toggle button{background:#fff;border:2px solid var(--line);border-radius:99px;
+    padding:8px 18px;font-weight:800;font-size:13.5px;color:var(--mut);cursor:pointer;
+    font-family:inherit;transition:all .15s}
+  .lang-toggle button.active{background:var(--p);color:#fff;border-color:var(--p);box-shadow:0 3px 0 var(--pd)}
+  .en{direction:ltr;text-align:left;font-family:'Inter','Segoe UI',sans-serif}
+  body[data-lang="en"]{direction:ltr;text-align:left}
+  body[data-lang="en"] .ar-only{display:none}
+  body[data-lang="ar"] .en-only{display:none}
+  .contact-row{display:flex;align-items:center;gap:14px;padding:18px 20px;
+    background:linear-gradient(135deg,#eff3ff,#e6ecff);
+    border:1.5px solid var(--line);border-radius:18px;margin-top:8px}
+  .contact-row .icon{flex:0 0 50px;height:50px;border-radius:14px;
+    background:linear-gradient(135deg,var(--p),var(--pd));color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:900}
+  .contact-row .info{flex:1;min-width:0}
+  .contact-row .label{font-size:13px;color:var(--mut);font-weight:700;margin-bottom:2px}
+  .contact-row .value{font-size:17px;font-weight:900;color:var(--ink);word-break:break-all}
+  .contact-row .value.en{direction:ltr;text-align:start}
+  footer{margin-top:30px;text-align:center;color:var(--faint);font-size:12.5px;font-weight:600}
+  @media (max-width:480px){
+    .wrap{padding:74px 16px 60px} h1{font-size:24px} h2{font-size:17px}
+    .card{padding:18px 18px} .contact-row .value{font-size:15px}
+  }
+</style>
+</head>
+<body data-lang="ar">
+
+<div class="topbar">
+  <a class="backbtn" href="/" aria-label="الرئيسية">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M19 12H6M11 6l-5 6 5 6"/>
+    </svg>
+    <span class="ar-only">الرئيسية</span>
+    <span class="en-only">Home</span>
+  </a>
+  <span class="topbar-title">
+    <span class="ar-only">الدعم</span>
+    <span class="en-only">Support</span>
+  </span>
+</div>
+
+<div class="wrap">
+
+  <header>
+    <div class="logo">طـ</div>
+    <h1><span class="ar-only">الدعم والمساعدة</span><span class="en-only">Support &amp; Help</span></h1>
+    <div class="sub"><span class="ar-only">تطبيق طلاقة • Talaqh</span><span class="en-only">Talaqh App</span></div>
+  </header>
+
+  <div class="lang-toggle">
+    <button id="btn-ar" class="active" onclick="setLang('ar')">العربية</button>
+    <button id="btn-en" onclick="setLang('en')">English</button>
+  </div>
+
+  <!-- ============== ARABIC ============== -->
+  <div class="ar-only">
+
+    <div class="card">
+      <h2>تواصل معنا</h2>
+      <p>عندك سؤال، اقتراح، أو مشكلة فنية؟ نحب نسمع منك. راح نرجع لك في أقرب وقت.</p>
+
+      <a href="mailto:talaqa18@gmail.com?subject=طلاقة%20—%20استفسار" class="contact-row" style="text-decoration:none;color:inherit;cursor:pointer">
+        <div class="icon">✉</div>
+        <div class="info">
+          <div class="label">البريد الإلكتروني</div>
+          <div class="value en">talaqa18@gmail.com</div>
+        </div>
+      </a>
+    </div>
+
+    <div class="card">
+      <h2>أسئلة شائعة</h2>
+
+      <h3>كيف ألغي اشتراكي؟</h3>
+      <p>اشتراكك يُدار من Apple. افتح <strong>الإعدادات</strong> → اضغط على اسمك → <strong>الاشتراكات</strong> → <strong>طلاقة</strong> → <strong>إلغاء الاشتراك</strong>. الإلغاء يأخذ مفعوله نهاية الفترة الحالية.</p>
+
+      <h3>كيف أرجّع شراء؟</h3>
+      <p>طلبات الاسترداد تتم عن طريق Apple. ادخل على <a href="https://reportaproblem.apple.com" target="_blank" rel="noopener">reportaproblem.apple.com</a> واطلب الاسترداد للمعاملة.</p>
+
+      <h3>نسيت تقدّمي بعد إعادة تثبيت التطبيق</h3>
+      <p>تأكّد أنك سجّلت دخول بنفس رقم الجوال. تقدّمك محفوظ على السحابة ويرجع تلقائيًا.</p>
+
+      <h3>الميكروفون ما يشتغل في تقييم النطق</h3>
+      <p>افتح إعدادات الجوال → <strong>طلاقة</strong> → <strong>الميكروفون</strong> وفعّله. ثم أعد فتح التطبيق.</p>
+
+      <h3>حذف حسابي</h3>
+      <p>من داخل التطبيق: <strong>الإعدادات</strong> → <strong>الحساب</strong> → <strong>حذف الحساب</strong>. أو راسلنا على البريد فوق ونحذف بياناتك خلال ٧ أيام.</p>
+    </div>
+
+    <div class="card">
+      <h2>روابط مفيدة</h2>
+      <ul>
+        <li><a href="/privacy.html">سياسة الخصوصية</a></li>
+        <li><a href="/terms.html">شروط الاستخدام</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <!-- ============== ENGLISH ============== -->
+  <div class="en-only">
+
+    <div class="card">
+      <h2>Contact us</h2>
+      <p>Have a question, suggestion, or technical issue? We'd love to hear from you. We'll get back to you as soon as possible.</p>
+
+      <a href="mailto:talaqa18@gmail.com?subject=Talaqh%20—%20Support" class="contact-row" style="text-decoration:none;color:inherit;cursor:pointer">
+        <div class="icon">✉</div>
+        <div class="info">
+          <div class="label">Email</div>
+          <div class="value en">talaqa18@gmail.com</div>
+        </div>
+      </a>
+    </div>
+
+    <div class="card">
+      <h2>Frequently asked</h2>
+
+      <h3>How do I cancel my subscription?</h3>
+      <p>Your subscription is managed by Apple. Open <strong>Settings</strong> → tap your name → <strong>Subscriptions</strong> → <strong>Talaqh</strong> → <strong>Cancel Subscription</strong>. The cancellation takes effect at the end of the current billing period.</p>
+
+      <h3>How do I get a refund?</h3>
+      <p>Refunds are handled by Apple. Visit <a href="https://reportaproblem.apple.com" target="_blank" rel="noopener">reportaproblem.apple.com</a> and request a refund for the transaction.</p>
+
+      <h3>I lost my progress after reinstalling</h3>
+      <p>Make sure you sign in with the same phone number. Your progress is cloud-synced and will restore automatically.</p>
+
+      <h3>The microphone doesn't work for pronunciation</h3>
+      <p>Open Settings → <strong>Talaqh</strong> → <strong>Microphone</strong> and enable it. Then reopen the app.</p>
+
+      <h3>Delete my account</h3>
+      <p>In the app: <strong>Settings</strong> → <strong>Account</strong> → <strong>Delete account</strong>. Or email us at the address above and we'll erase your data within 7 days.</p>
+    </div>
+
+    <div class="card">
+      <h2>Useful links</h2>
+      <ul>
+        <li><a href="/privacy.html">Privacy Policy</a></li>
+        <li><a href="/terms.html">Terms of Use</a></li>
+      </ul>
+    </div>
+
+  </div>
+
+  <footer>
+    <p><span class="ar-only">© 2026 طلاقة • Talaqh — جميع الحقوق محفوظة</span>
+       <span class="en-only">© 2026 Talaqh — All rights reserved</span></p>
+  </footer>
+
+</div>
+
+<script>
+  function setLang(l){
+    document.body.setAttribute('data-lang', l);
+    document.getElementById('btn-ar').classList.toggle('active', l==='ar');
+    document.getElementById('btn-en').classList.toggle('active', l==='en');
+    document.documentElement.setAttribute('lang', l);
+    document.documentElement.setAttribute('dir', l==='ar' ? 'rtl' : 'ltr');
+    try{ localStorage.setItem('talaqa.legal.lang', l); }catch(_){}
+  }
+  try{
+    var saved = localStorage.getItem('talaqa.legal.lang');
+    if(saved==='en' || saved==='ar') setLang(saved);
+  }catch(_){}
+</script>
+
+</body>
+</html>
