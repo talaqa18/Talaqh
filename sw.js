@@ -1,5 +1,5 @@
 /* طلاقة — service worker (offline app shell) */
-const CACHE = 'talaqa-v37';
+const CACHE = 'talaqa-v38';
 const ASSETS = [
   './',
   './index.html',
@@ -54,20 +54,28 @@ self.addEventListener('fetch', (e) => {
 
   const cacheOk = (res) => res && res.ok && (res.type === 'basic' || res.type === 'cors');
 
-  // App CODE (index.html + the small JS files) changes on every deploy, so serve
-  // it NETWORK-FIRST: always fresh when online, fall back to cache offline. This
-  // is what was missing — cache-first served stale code after each deploy. Large
-  // data under /content/ (curriculum.js / examples.js) stays cache-first (fast,
-  // busted by the CACHE version bump above when it changes).
+  // App CODE (index.html + the small JS files) — STALE-WHILE-REVALIDATE.
+  // Serve the cached copy INSTANTLY (this is the "fast app feel"), then
+  // refresh in the background so the NEXT load gets fresh code. The CACHE
+  // version bump on every deploy + caches.delete in 'activate' guarantees
+  // staleness is bounded to one load after each deploy.
+  //
+  // We used to be network-first here ("always fresh when online") — but that
+  // made EVERY in-app navigation wait on a network round-trip and felt slow
+  // on flaky connections. Stale-while-revalidate fixes the perceived lag
+  // without sacrificing freshness for the next visit.
   const isContent = url.pathname.includes('/content/');
   const isAppCode = !isContent && /\.(html|js)$/i.test(url.pathname);
 
   if (isAppCode) {
     e.respondWith(
-      fetch(req).then((res) => {
-        if (cacheOk(res)) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {}); }
-        return res;
-      }).catch(() => caches.match(req))
+      caches.match(req).then((hit) => {
+        const net = fetch(req).then((res) => {
+          if (cacheOk(res)) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {}); }
+          return res;
+        }).catch(() => hit);
+        return hit || net;
+      })
     );
     return;
   }

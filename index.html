@@ -273,8 +273,25 @@ const PROD_ORIGIN = 'https://talaqh.com';
    native runtime and is absent in the browser PWA, so this is the single source of
    truth for every native-vs-web branch (share links, notifications, service worker,
    deep links, status bar, splash). */
-function isNativeApp(){ try{ return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform==='function' && window.Capacitor.isNativePlatform()); }catch(_){ return false; } }
-function isStandalone(){ try{ return isNativeApp() || (typeof navigator!=='undefined' && navigator.standalone===true) || (typeof window!=='undefined' && window.matchMedia && matchMedia('(display-mode: standalone)').matches); }catch(_){ return false; } }
+// Device-capability checks are stable for the life of the page (a tab can't
+// switch from "browser" to "native Capacitor" mid-session, and the standalone
+// media query only flips once when the PWA is launched from the home screen).
+// Cache on first access so hot render paths don't pay the matchMedia +
+// Capacitor.isNativePlatform() cost every frame.
+let __cachedIsNative = null;
+let __cachedIsStandalone = null;
+function isNativeApp(){
+  if(__cachedIsNative !== null) return __cachedIsNative;
+  try{ __cachedIsNative = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform==='function' && window.Capacitor.isNativePlatform()); }
+  catch(_){ __cachedIsNative = false; }
+  return __cachedIsNative;
+}
+function isStandalone(){
+  if(__cachedIsStandalone !== null) return __cachedIsStandalone;
+  try{ __cachedIsStandalone = isNativeApp() || (typeof navigator!=='undefined' && navigator.standalone===true) || (typeof window!=='undefined' && window.matchMedia && matchMedia('(display-mode: standalone)').matches); }
+  catch(_){ __cachedIsStandalone = false; }
+  return __cachedIsStandalone;
+}
 function appEnv(){
   if(isNativeApp()) return 'production';   // the shipped native binary is always production
   try{
@@ -888,8 +905,32 @@ function blobs(){
   );
 }
 function frame(...kids){
+  // The legal viewer (privacy/terms) renders as a global overlay so every screen
+  // can show it without each one having to opt in — opening it is a setUI flip,
+  // closing is the same, no document navigation, no boot cycle.
+  const legal = (app.state && app.state.ui && app.state.ui.legalOpen)
+    ? legalViewer(app.state.ui.legalOpen) : null;
   return h('div',{class:'scr', style:{ background:T.bg, color:T.ink }}, blobs(),
-    h('div',{ style:{ position:'relative', zIndex:1, height:'100%', display:'flex', flexDirection:'column', minHeight:0 }}, ...kids));
+    h('div',{ style:{ position:'relative', zIndex:1, height:'100%', display:'flex', flexDirection:'column', minHeight:0 }}, ...kids),
+    legal);
+}
+/* Slide-up modal that loads /privacy.html or /terms.html in an iframe — no
+   document navigation, no boot cycle, returns instantly when closed. Opening
+   is a single setUI({legalOpen:'privacy'|'terms'}) call from anywhere. */
+function legalViewer(which){
+  const url = which==='terms' ? '/terms.html' : '/privacy.html';
+  const title = which==='terms' ? 'شروط الاستخدام' : 'سياسة الخصوصية';
+  const close = ()=>app.setUI({ legalOpen:null });
+  return h('div',{ style:{ position:'fixed', inset:0, zIndex:120, display:'flex', flexDirection:'column', background:'#fff' },
+    // Close on Escape (web keyboard users).
+    onKeyDown:(e)=>{ if(e && e.key==='Escape') close(); } },
+    h('div',{ style:{ padding:'max(env(safe-area-inset-top), 10px) 14px 10px', display:'flex', alignItems:'center', gap:'10px', borderBottom:`1.5px solid ${T.line}`, background:T.bg }},
+      h('button',{ class:'press', onClick:close, 'aria-label':'إغلاق',
+        style:{ width:'40px', height:'40px', borderRadius:'12px', background:'#fff', border:`2px solid ${T.line}`, display:'flex', alignItems:'center', justifyContent:'center', color:T.ink, flexShrink:0 }},
+        ico('x',{size:22, sw:2.4})),
+      h('div',{ style:{ flex:1, fontWeight:900, fontSize:'15px', color:T.ink }}, title)),
+    h('iframe',{ src:url, title, loading:'eager',
+      style:{ flex:1, border:'none', width:'100%', background:'#fff' }}));
 }
 function statusBar(color){
   // Real installed app: no fake clock/battery/notch — just reserve the device's
@@ -2331,9 +2372,9 @@ SCREENS.auth = (s)=>{
       bigBtn(busy ? 'شوي...' : (codeStep?'دخول':'أرسل الرمز'), { onClick:(codeStep?verify:sendCode), icon:'arrowL', disabled:busy }),
       h('div',{style:{ textAlign:'center', color:T.faint, fontSize:'12px', fontWeight:700, marginTop:'12px', lineHeight:1.7 }},
         'بالمتابعة، أنت توافق على ',
-        h('button',{class:'press', onClick:()=>openExternal('/terms.html'), style:{ background:'transparent', color:T.P, fontWeight:800, padding:0, textDecoration:'underline' }},'الشروط'),
+        h('button',{class:'press', onClick:()=>app.setUI({legalOpen:'terms'}), style:{ background:'transparent', color:T.P, fontWeight:800, padding:0, textDecoration:'underline' }},'الشروط'),
         ' و',
-        h('button',{class:'press', onClick:()=>openExternal('/privacy.html'), style:{ background:'transparent', color:T.P, fontWeight:800, padding:0, textDecoration:'underline' }},'سياسة الخصوصية'))
+        h('button',{class:'press', onClick:()=>app.setUI({legalOpen:'privacy'}), style:{ background:'transparent', color:T.P, fontWeight:800, padding:0, textDecoration:'underline' }},'سياسة الخصوصية'))
     ),
     (!codeStep && s.ui.ccOpen) ? countrySheet(s) : null
   );
@@ -3615,21 +3656,28 @@ SCREENS.settings = (s)=>{
           }))),
       // app
       sectionLabel('البرنامج'),
-      card({ p:8, style:{'--i':4} },
-        installRow(s),
-        installRow(s) ? divider() : null,
-        settingRowBtn('mail', T.P, 'تواصل معنا', 'للدعم أو الاقتراحات: Talaqh18@gmail.com',
-          ()=>openExternal('mailto:Talaqh18@gmail.com?subject='+encodeURIComponent('استفسار من تطبيق طلاقة'))),
-        divider(),
-        settingRowBtn('lock', T.good, 'سياسة الخصوصية', 'كيف نتعامل مع بياناتك',
-          ()=>openExternal('/privacy.html')),
-        divider(),
-        settingRowBtn('book', T.CO, 'شروط الاستخدام', 'الاتفاقية والاشتراك',
-          ()=>openExternal('/terms.html')),
-        divider(),
-        // Informational only — no chevron, no click target, so it doesn't look broken.
-        settingRow('user', T.mut, 'عن البرنامج', 'طلاقة • الإصدار ١٫٢', null),
-      ),
+      (function(){
+        // Compute the install row ONCE per render — installRow() runs a
+        // matchMedia + Capacitor probe; calling it twice doubled that work
+        // for nothing.
+        const inst = installRow(s);
+        return card({ p:8, style:{'--i':4} },
+          inst,
+          inst ? divider() : null,
+          settingRowBtn('mail', T.P, 'تواصل معنا', 'للدعم أو الاقتراحات: Talaqh18@gmail.com',
+            ()=>openExternal('mailto:Talaqh18@gmail.com?subject='+encodeURIComponent('استفسار من تطبيق طلاقة'))),
+          divider(),
+          // In-app slide-up modal: instant open, instant close, no boot cycle.
+          settingRowBtn('lock', T.good, 'سياسة الخصوصية', 'كيف نتعامل مع بياناتك',
+            ()=>app.setUI({legalOpen:'privacy'})),
+          divider(),
+          settingRowBtn('book', T.CO, 'شروط الاستخدام', 'الاتفاقية والاشتراك',
+            ()=>app.setUI({legalOpen:'terms'})),
+          divider(),
+          // Informational only — no chevron, no click target, so it doesn't look broken.
+          settingRow('user', T.mut, 'عن البرنامج', 'طلاقة • الإصدار ١٫٢', null)
+        );
+      })(),
       h('div',{style:{ marginTop:'6px','--i':5 }},
         bigBtn('خروج', { bg:T.badSoft, sh:'#f3c2c8', color:T.bad, iconBefore:'logout', onClick:()=>logout() })),
       // GDPR / store-required: permanent account deletion with a two-step confirm.
@@ -3964,16 +4012,16 @@ SCREENS.paywall = (s)=>{
             // Apple guideline 3.1.2(a): paywall MUST show functional links to
             // Privacy Policy + Terms of Use (EULA) for auto-renewable subscriptions.
             h('div',{style:{ display:'flex', justifyContent:'center', alignItems:'center', gap:'14px', marginTop:'10px', fontSize:'12px', fontWeight:800 }},
-              h('button',{class:'press', onClick:()=>openExternal('/terms.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'شروط الاستخدام'),
+              h('button',{class:'press', onClick:()=>app.setUI({legalOpen:'terms'}), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'شروط الاستخدام'),
               h('span',{style:{color:T.faint}},'•'),
-              h('button',{class:'press', onClick:()=>openExternal('/privacy.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'سياسة الخصوصية')))
+              h('button',{class:'press', onClick:()=>app.setUI({legalOpen:'privacy'}), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'سياسة الخصوصية')))
         : h('div',{style:{ textAlign:'center', marginTop:'12px','--i':3 }},
             h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, lineHeight:1.6 }},
               'الدفع متاح الحين في تطبيق آيفون فقط. على الويب الباقات للعرض.'),
             h('div',{style:{ display:'flex', justifyContent:'center', alignItems:'center', gap:'14px', marginTop:'10px', fontSize:'12px', fontWeight:800 }},
-              h('button',{class:'press', onClick:()=>openExternal('/terms.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'شروط الاستخدام'),
+              h('button',{class:'press', onClick:()=>app.setUI({legalOpen:'terms'}), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'شروط الاستخدام'),
               h('span',{style:{color:T.faint}},'•'),
-              h('button',{class:'press', onClick:()=>openExternal('/privacy.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'سياسة الخصوصية')))),
+              h('button',{class:'press', onClick:()=>app.setUI({legalOpen:'privacy'}), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'سياسة الخصوصية')))),
     footer(bigBtn('اشترك الحين — '+chosenView._priceStr+'/'+chosenView.per, { icon:'arrowL', onClick:subscribe }))
   );
 };
