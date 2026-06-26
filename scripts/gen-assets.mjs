@@ -1,9 +1,8 @@
 /* Generate iOS/Android source art for @capacitor/assets into ./assets.
  *
- * This produces a clean, on-brand PLACEHOLDER mark (indigo→indigo gradient + a
- * white speech bubble with a gold-accented "fluency" sound-wave) so the icon/splash
- * pipeline works end-to-end on Windows with no Mac. Swap these out with final brand
- * art any time and re-run:  npm run ios:assets
+ * Produces the official brand mark — the "spark" star (4-point sparkle + 3
+ * gold trail dots) on an indigo gradient — matching the in-app brandMark()
+ * shape in index.html so the launcher icon and the in-app logo are the same.
  *
  * Pure vector shapes only (no fonts) so it rasterizes identically everywhere.
  * Run:  node scripts/gen-assets.mjs   (sharp ships with @capacitor/assets)
@@ -20,36 +19,44 @@ mkdirSync(OUT, { recursive: true });
 const INDIGO = "#4f6bf0", INDIGO_D = "#3a52d6", GOLD = "#ffd43b", WHITE = "#ffffff";
 const GRAD = `<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${INDIGO}"/><stop offset="1" stop-color="${INDIGO_D}"/></linearGradient>`;
 
-// Four rounded "sound-wave" bars centered ~(512,456) in 1024 space; bar #2 is the gold accent.
-function bars(barColor, accentColor) {
-  const xs = [332, 432, 532, 632], hs = [150, 250, 200, 120], cy = 456, w = 60, rx = 30;
-  return xs.map((x, i) => {
-    const h = hs[i], y = cy - h / 2, fill = i === 1 ? accentColor : barColor;
-    return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}"/>`;
-  }).join("");
-}
-// Speech bubble (rounded rect + tail) in 1024 space.
-function bubble(fill) {
-  return `<rect x="212" y="236" width="600" height="440" rx="104" fill="${fill}"/>` +
-         `<path d="M360 632 L360 772 L478 648 Z" fill="${fill}"/>`;
+/* The brand "spark": a 4-point sparkle with a 3-dot gold trail leading into it
+   from the lower-left. SAME path as the in-app brandMark() (index.html ~ line
+   886) so launcher icon ↔ in-app logo stay identical. Coordinates are in a
+   60×60 viewBox; outer SVG resizes that to whatever target we need. */
+function sparkMark(starColor, trailColor) {
+  return (
+    `<circle cx="9" cy="52" r="1.7" fill="${trailColor}"/>` +
+    `<circle cx="14" cy="47" r="2.4" fill="${trailColor}"/>` +
+    `<circle cx="21" cy="40" r="3.4" fill="${trailColor}"/>` +
+    `<path d="M36 8 C 38 22, 41 25, 54 27 C 41 29, 38 32, 36 46 C 34 32, 31 29, 18 27 C 31 25, 34 22, 36 8 Z" fill="${starColor}"/>`
+  );
 }
 
-// App icon: full-bleed indigo gradient, white bubble, indigo bars + gold accent.
+// App icon: full-bleed indigo gradient, white spark, gold trail.
+// withBg=false drops the background (Android adaptive foreground layer).
 const iconSVG = (withBg) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>${GRAD}</defs>` +
-  (withBg ? `<rect width="1024" height="1024" fill="url(#g)"/>` : "") +
-  bubble(WHITE) + bars(INDIGO, GOLD) + `</svg>`;
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 60 60"><defs>${GRAD}</defs>` +
+  (withBg ? `<rect width="60" height="60" fill="url(#g)"/>` : "") +
+  sparkMark(WHITE, GOLD) +
+  `</svg>`;
 
 // Android adaptive background layer: solid gradient.
 const bgSVG = () =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>${GRAD}</defs><rect width="1024" height="1024" fill="url(#g)"/></svg>`;
 
-// Launch splash: bubble in the brand gradient with white bars + gold, centered on the surface color.
+// Launch splash: a rounded indigo card with the spark inside, centered on the
+// surface color. Card occupies ~28% of width, matching iOS app-icon proportions.
 const splashSVG = (bg) => {
-  const f = 1.7, cx = 512, cy = 504, tx = 1366 - cx * f, ty = 1366 - cy * f;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="2732" height="2732" viewBox="0 0 2732 2732"><defs>${GRAD}</defs>` +
-    `<rect width="2732" height="2732" fill="${bg}"/>` +
-    `<g transform="translate(${tx},${ty}) scale(${f})">${bubble("url(#g)")}${bars(WHITE, GOLD)}</g></svg>`;
+  const CANVAS = 2732, TARGET = 760, SCALE = TARGET / 60;
+  const TX = (CANVAS - TARGET) / 2, TY = (CANVAS - TARGET) / 2;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS}" height="${CANVAS}" viewBox="0 0 ${CANVAS} ${CANVAS}"><defs>${GRAD}</defs>` +
+    `<rect width="${CANVAS}" height="${CANVAS}" fill="${bg}"/>` +
+    `<g transform="translate(${TX},${TY}) scale(${SCALE})">` +
+    `<rect width="60" height="60" rx="13.5" fill="url(#g)"/>` +
+    sparkMark(WHITE, GOLD) +
+    `</g></svg>`
+  );
 };
 
 async function png(svg, file, size) {
@@ -57,9 +64,9 @@ async function png(svg, file, size) {
   console.log("wrote assets/" + file + "  (" + size + "x" + size + ")");
 }
 
-await png(iconSVG(true), "icon-only.png", 1024);       // iOS AppIcon + 1024 marketing icon source (opaque, no alpha)
-await png(iconSVG(false), "icon-foreground.png", 1024); // Android adaptive foreground
-await png(bgSVG(), "icon-background.png", 1024);         // Android adaptive background
-await png(splashSVG("#eef1ff"), "splash.png", 2732);    // light launch screen
-await png(splashSVG("#0e1220"), "splash-dark.png", 2732); // dark launch screen
-console.log("done — now run:  npx @capacitor/assets generate --ios   (after `npx cap add ios`)");
+await png(iconSVG(true),  "icon-only.png",       1024);  // iOS AppIcon + 1024 marketing icon source (opaque, no alpha)
+await png(iconSVG(false), "icon-foreground.png", 1024);  // Android adaptive foreground
+await png(bgSVG(),         "icon-background.png", 1024); // Android adaptive background
+await png(splashSVG("#eef1ff"), "splash.png",       2732); // light launch screen
+await png(splashSVG("#0e1220"), "splash-dark.png",  2732); // dark launch screen
+console.log("done — Codemagic will run `npx @capacitor/assets generate --ios` automatically on next build.");
