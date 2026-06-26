@@ -1,5 +1,5 @@
 /* طلاقة — service worker (offline app shell) */
-const CACHE = 'talaqa-v34';
+const CACHE = 'talaqa-v35';
 const ASSETS = [
   './',
   './index.html',
