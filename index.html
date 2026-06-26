@@ -2329,7 +2329,11 @@ SCREENS.auth = (s)=>{
     ),
     footer(
       bigBtn(busy ? 'شوي...' : (codeStep?'دخول':'أرسل الرمز'), { onClick:(codeStep?verify:sendCode), icon:'arrowL', disabled:busy }),
-      h('div',{style:{ textAlign:'center', color:T.faint, fontSize:'12px', fontWeight:700, marginTop:'12px' }},'بالمتابعة، أنت توافق على الشروط وسياسة الخصوصية')
+      h('div',{style:{ textAlign:'center', color:T.faint, fontSize:'12px', fontWeight:700, marginTop:'12px', lineHeight:1.7 }},
+        'بالمتابعة، أنت توافق على ',
+        h('button',{class:'press', onClick:()=>openExternal('/terms.html'), style:{ background:'transparent', color:T.P, fontWeight:800, padding:0, textDecoration:'underline' }},'الشروط'),
+        ' و',
+        h('button',{class:'press', onClick:()=>openExternal('/privacy.html'), style:{ background:'transparent', color:T.P, fontWeight:800, padding:0, textDecoration:'underline' }},'سياسة الخصوصية'))
     ),
     (!codeStep && s.ui.ccOpen) ? countrySheet(s) : null
   );
@@ -3509,6 +3513,38 @@ function settingRow(icn, color, title, sub, control){
       sub?h('div',{style:{ fontSize:'12px', color:T.mut, fontWeight:600 }}, sub):null),
     control||null);
 }
+/* Tappable settingRow — same look as settingRow but renders as a real <button>
+   with a chevron, so the row is actually focusable + clickable (App Store reject
+   risk: rows with chevrons that don't navigate look broken). */
+function settingRowBtn(icn, color, title, sub, onClick){
+  return h('button',{class:'press', onClick, style:{ width:'100%', textAlign:'start', border:'none', background:'transparent', padding:'13px 4px', display:'flex', alignItems:'center', gap:'13px', cursor:'pointer' }},
+    h('span',{style:{ width:'40px', height:'40px', borderRadius:'12px', background:color+'1f', color, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}, ico(icn,{size:21})),
+    h('div',{style:{ flex:1 }}, h('div',{style:{ fontWeight:800, fontSize:'15px' }}, title),
+      sub?h('div',{style:{ fontSize:'12px', color:T.mut, fontWeight:600 }}, sub):null),
+    h('span',{style:{color:T.faint, display:'flex', flexShrink:0}}, ico('chevL',{size:20})));
+}
+/* External URL helper. On Capacitor iOS the WKWebView intercepts http(s) target=_blank
+   and opens Safari; on the web we open a new tab. mailto:/tel:/itms-apps: always work
+   via location.href. Path-relative URLs (/privacy, /terms) are rewritten to the
+   production origin when running natively, otherwise they would resolve to
+   capacitor://localhost/privacy and 404. */
+function openExternal(url){
+  try{
+    if(/^(mailto|tel|itms-apps|sms):/i.test(url)){ window.location.href = url; return; }
+    if(url && url.charAt(0)==='/' && isNativeApp()){ url = PROD_ORIGIN + url; }
+    const w = window.open(url, '_blank', 'noopener,noreferrer');
+    if(!w){ window.location.href = url; }
+  }catch(_){ try{ window.location.href = url; }catch(__){} }
+}
+/* iOS App Store subscription management deep link. itms-apps:// opens the
+   Settings → Apple ID → Subscriptions panel directly on the device. */
+function openManageSubscriptions(){
+  if(isNativeApp()){
+    openExternal('itms-apps://apps.apple.com/account/subscriptions');
+  } else {
+    openExternal('https://apps.apple.com/account/subscriptions');
+  }
+}
 SCREENS.settings = (s)=>{
   const setS=(patch)=>app.set({ settings:Object.assign({}, s.settings, patch) });
   return frame(
@@ -3574,8 +3610,18 @@ SCREENS.settings = (s)=>{
       sectionLabel('البرنامج'),
       card({ p:8, style:{'--i':4} },
         installRow(s),
+        installRow(s) ? divider() : null,
+        settingRowBtn('mail', T.P, 'تواصل معنا', 'للدعم أو الاقتراحات: Talaqh18@gmail.com',
+          ()=>openExternal('mailto:Talaqh18@gmail.com?subject='+encodeURIComponent('استفسار من تطبيق طلاقة'))),
         divider(),
-        settingRow('user', T.mut, 'عن البرنامج', 'طلاقة • الإصدار ١٫١', h('span',{style:{color:T.faint}},ico('chevL',{size:20}))),
+        settingRowBtn('lock', T.good, 'سياسة الخصوصية', 'كيف نتعامل مع بياناتك',
+          ()=>openExternal('/privacy.html')),
+        divider(),
+        settingRowBtn('book', T.CO, 'شروط الاستخدام', 'الاتفاقية والاشتراك',
+          ()=>openExternal('/terms.html')),
+        divider(),
+        // Informational only — no chevron, no click target, so it doesn't look broken.
+        settingRow('user', T.mut, 'عن البرنامج', 'طلاقة • الإصدار ١٫٢', null),
       ),
       h('div',{style:{ marginTop:'6px','--i':5 }},
         bigBtn('خروج', { bg:T.badSoft, sh:'#f3c2c8', color:T.bad, iconBefore:'logout', onClick:()=>logout() })),
@@ -3608,12 +3654,16 @@ SCREENS.settings = (s)=>{
   );
 };
 function installRow(s){
+  // Already running as the installed native app or installed PWA — hide the row entirely.
+  if(isNativeApp() || isStandalone()) return null;
   if(window.__deferredPrompt){
     return settingRow('download', T.good, 'تثبيت التطبيق', 'ضيّف طلاقة لشاشتك الرئيسية',
       h('button',{class:'press', onClick:async()=>{ try{ const e=window.__deferredPrompt; e.prompt(); await e.userChoice; window.__deferredPrompt=null; app.notify(); }catch(err){ toast('ما قدرنا نثبّت التطبيق'); } },
         style:{ background:T.good, color:'#fff', fontWeight:900, fontSize:'13px', padding:'8px 14px', borderRadius:'12px' }},'ثبّت'));
   }
-  return settingRow('download', T.mut, 'تثبيت التطبيق', 'افتح من المتصفح ثم اضغط «إضافة للشاشة الرئيسية»', h('span',{style:{color:T.faint}},ico('chevL',{size:20})));
+  // No native install prompt available (iOS Safari, some Androids). Show instructions
+  // with NO chevron arrow — there's nothing to navigate to, so a chevron would lie.
+  return settingRow('download', T.mut, 'تثبيت التطبيق', 'افتح من المتصفح ثم اضغط «إضافة للشاشة الرئيسية»', null);
 }
 function sectionLabel(t){ return h('div',{style:{ fontSize:'12.5px', fontWeight:900, color:T.faint, padding:'10px 6px 2px', '--i':2 }}, t); }
 function divider(){ return h('div',{style:{ height:'1.5px', background:T.line, margin:'0 8px' }}); }
@@ -3669,8 +3719,10 @@ function subscriptionCard(s){
             settingRow('refresh', T.P, 'غيّر الباقة', 'انقل من شهري لأسبوعي',
               h('button',{class:'press', onClick:()=>go('paywall'), style:{ background:T.Psoft, color:T.P, fontWeight:900, fontSize:'12.5px', padding:'8px 13px', borderRadius:'12px' }},'غيّر')),
             divider(),
-            settingRow('x', T.bad, 'الغي الاشتراك', 'رجوع للباقة المجانية',
-              h('button',{class:'press', onClick:()=>{ app.set({subscribed:false, plan:null}); toast('ألغينا الاشتراك ✓'); }, style:{ background:T.badSoft, color:T.bad, fontWeight:900, fontSize:'12.5px', padding:'8px 13px', borderRadius:'12px' }},'إلغاء'))));
+            // Apple guideline 3.1.2(a): apps must NOT pretend to cancel subscriptions
+            // themselves. The only legitimate cancel path is App Store → Subscriptions.
+            settingRowBtn('x', T.bad, 'إدارة الاشتراك أو إلغاءه', 'يفتح "الاشتراكات" في إعدادات آبل',
+              ()=>openManageSubscriptions())));
   }
   return card({ p:14, style:{'--i':1} },
     h('div',{style:{ display:'flex', alignItems:'center', gap:'13px' }},
@@ -3901,9 +3953,20 @@ SCREENS.paywall = (s)=>{
         ? h('div',{style:{ textAlign:'center', marginTop:'14px','--i':3 }},
             h('button',{class:'press', onClick:restore, style:{ background:'transparent', color:T.P, fontWeight:800, fontSize:'13px', padding:'6px 10px' }},'استعادة المشتريات'),
             h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, marginTop:'8px', lineHeight:1.7 }},
-              'تجربة مجانية ٣ أيام، بعدها يتجدد الاشتراك تلقائياً من حساب آبل. تقدر تلغيه في أي وقت من إعدادات الآي‌كلاود.'))
-        : h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, textAlign:'center', marginTop:'12px', lineHeight:1.6,'--i':3 }},
-            'الدفع متاح الحين في تطبيق آيفون فقط. على الويب الباقات للعرض.')),
+              'تجربة مجانية ٣ أيام، بعدها يتجدد الاشتراك تلقائياً من حساب آبل. تقدر تلغيه في أي وقت من إعدادات الآي‌كلاود.'),
+            // Apple guideline 3.1.2(a): paywall MUST show functional links to
+            // Privacy Policy + Terms of Use (EULA) for auto-renewable subscriptions.
+            h('div',{style:{ display:'flex', justifyContent:'center', alignItems:'center', gap:'14px', marginTop:'10px', fontSize:'12px', fontWeight:800 }},
+              h('button',{class:'press', onClick:()=>openExternal('/terms.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'شروط الاستخدام'),
+              h('span',{style:{color:T.faint}},'•'),
+              h('button',{class:'press', onClick:()=>openExternal('/privacy.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'سياسة الخصوصية')))
+        : h('div',{style:{ textAlign:'center', marginTop:'12px','--i':3 }},
+            h('div',{style:{ fontSize:'11.5px', color:T.faint, fontWeight:700, lineHeight:1.6 }},
+              'الدفع متاح الحين في تطبيق آيفون فقط. على الويب الباقات للعرض.'),
+            h('div',{style:{ display:'flex', justifyContent:'center', alignItems:'center', gap:'14px', marginTop:'10px', fontSize:'12px', fontWeight:800 }},
+              h('button',{class:'press', onClick:()=>openExternal('/terms.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'شروط الاستخدام'),
+              h('span',{style:{color:T.faint}},'•'),
+              h('button',{class:'press', onClick:()=>openExternal('/privacy.html'), style:{ background:'transparent', color:T.P, padding:'4px 6px', textDecoration:'underline' }},'سياسة الخصوصية')))),
     footer(bigBtn('اشترك الحين — '+chosenView._priceStr+'/'+chosenView.per, { icon:'arrowL', onClick:subscribe }))
   );
 };
