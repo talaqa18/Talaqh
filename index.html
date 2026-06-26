@@ -877,7 +877,7 @@ function brandWord(opts){
   opts=opts||{}; const c=opts.color||T.ink;
   return h('div',{style:{ display:'flex', flexDirection:'column', alignItems:opts.align||'center', lineHeight:1 }},
     h('div',{style:{ fontFamily:"'Cairo','Tajawal',sans-serif", fontWeight:900, fontSize:(opts.size||32)+'px', color:c, letterSpacing:'-.01em' }},'طلاقة'),
-    opts.sub===false ? null : h('div',{class:'en', style:{ fontWeight:600, fontSize:(opts.subSize||12)+'px', letterSpacing:'.32em', color:opts.subColor||T.P, opacity:opts.subOpacity!=null?opts.subOpacity:1, marginTop:'5px', paddingInlineStart:'.32em' }},'TALAQA'));
+    opts.sub===false ? null : h('div',{class:'en', style:{ fontWeight:600, fontSize:(opts.subSize||12)+'px', letterSpacing:'.32em', color:opts.subColor||T.P, opacity:opts.subOpacity!=null?opts.subOpacity:1, marginTop:'5px', paddingInlineStart:'.32em' }},'TALAQH'));
 }
 
 /* ===================== SHARED COMPONENTS ===================== */
@@ -2014,7 +2014,7 @@ SCREENS.splash = ()=> h('div',{class:'scr', style:{ background:'radial-gradient(
     h('div',{class:'sp-flash', style:{ position:'absolute', width:'74px', height:'74px', borderRadius:'50%', background:'#fff', filter:'blur(7px)' }}),
     h('div',{class:'sp-star', style:{ position:'absolute', display:'flex' }}, brandMark({ size:120, spark:'#fff', trail:'#ffd43b' }))),
   h('div',{class:'sp-w1', style:{ fontFamily:"'Cairo','Tajawal',sans-serif", fontWeight:900, fontSize:'37px', letterSpacing:'-.01em' }},'طلاقة'),
-  h('div',{class:'sp-w2 en', style:{ fontWeight:600, fontSize:'13px', letterSpacing:'.34em', opacity:.92, marginTop:'7px', paddingInlineStart:'.34em' }},'TALAQA'),
+  h('div',{class:'sp-w2 en', style:{ fontWeight:600, fontSize:'13px', letterSpacing:'.34em', opacity:.92, marginTop:'7px', paddingInlineStart:'.34em' }},'TALAQH'),
   h('div',{class:'sp-w3', style:{ fontSize:'13.5px', fontWeight:600, opacity:.85, marginTop:'15px' }},'من أوّل كلمة إلى الطلاقة'),
   h('div',{style:{ position:'absolute', bottom:'42px', display:'flex', gap:'7px' }},
     ...[0,1,2].map(i=>h('span',{style:{ width:'8px', height:'8px', borderRadius:'50%', background:'rgba(255,255,255,.8)', animation:`blink 1s ${i*0.18}s infinite` }})))
@@ -3529,6 +3529,13 @@ function settingRowBtn(icn, color, title, sub, onClick){
    production origin when running natively, otherwise they would resolve to
    capacitor://localhost/privacy and 404. */
 function openExternal(url){
+  // Flush state to localStorage BEFORE navigating away. window.open with _blank
+  // SHOULD open a new tab, but some browsers / mobile Safari may replace the
+  // current document instead — without a flush, anything changed since the
+  // last 1.5s debounced cloud save would survive locally only if persist()
+  // already fired. persist() is synchronous on localStorage, so this is cheap
+  // insurance: user returns → app boots → state restores from localStorage.
+  try{ if(typeof app!=='undefined' && app && typeof app.persist==='function') app.persist(); }catch(_){}
   try{
     if(/^(mailto|tel|itms-apps|sms):/i.test(url)){ window.location.href = url; return; }
     if(url && url.charAt(0)==='/' && isNativeApp()){ url = PROD_ORIGIN + url; }
